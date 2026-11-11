@@ -4,11 +4,9 @@ import subprocess
 
 from fastapi.testclient import TestClient
 
-from clipforge import app as module
-from clipforge import narration
+from clipforge import app as module, narration
 from clipforge.captions import write_narration_captions
 from clipforge.engine import render_clip
-
 
 client = TestClient(module.app)
 
