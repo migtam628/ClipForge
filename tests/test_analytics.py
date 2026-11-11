@@ -126,6 +126,7 @@ def test_dashboard_contains_earnings_and_campaign_status_controls():
     assert 'id="analytics-earnings"' in page.text
     assert 'id="analytics-campaign-status"' in page.text
     assert 'data-page="analytics"' in page.text
-    script = client.get("/assets/app.js").text
+    script = client.get("/assets/analytics.js").text
     assert "loadAnalytics" in script
     assert "saveAnalytics" in script
+    assert '/assets/analytics.js' in page.text
