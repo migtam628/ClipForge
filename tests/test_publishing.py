@@ -3,8 +3,8 @@ import json
 
 from fastapi.testclient import TestClient
 
-from clipforge import publishing
 from clipforge import app as app_module
+from clipforge import publishing
 
 
 def test_platform_status_does_not_leak_credentials(monkeypatch):
