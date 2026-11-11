@@ -189,10 +189,12 @@ function buildClipEditor(job, clip) {
   ], clip.effect || job.options.effect);
 
   const framing = dropdown('Framing', [
-    ['crop', 'Crop to fill'], ['pad', 'Keep full frame']
+    ['smart', 'Smart · follow faces'], ['blur', 'Blurred background'],
+    ['crop', 'Centered crop'], ['pad', 'Keep full frame']
   ], clip.framing || job.options.framing);
 
   const captions = dropdown('Captions', [
+    ['karaoke', 'Word-aligned karaoke'], ['pop', 'Animated pop words'],
     ['bold', 'Bold yellow'], ['classic', 'Classic white'],
     ['neon', 'Neon pink'], ['none', 'No captions']
   ], clip.caption_style || (clip.captions_added ? job.options.caption_style : 'none'));
