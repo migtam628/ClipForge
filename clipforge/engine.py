@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from clipforge.import_auth import youtube_cookie_session
+
 HOSTS = (
     "youtube.com",
     "youtu.be",
@@ -258,8 +260,26 @@ def download_video(url: str, output_dir: Path) -> Path:
         "restrictfilenames": True,
         "extractor_args": {},
     }
-    with yt_dlp.YoutubeDL(opts) as downloader:
-        downloader.download([url])
+    # A mounted private cookie file is optional; never copy it into job storage.
+    # Use a writable temporary copy because yt-dlp may update cookies on exit.
+    with youtube_cookie_session(url) as cookiefile:
+        if cookiefile is not None:
+            opts["cookiefile"] = str(cookiefile)
+        try:
+            with yt_dlp.YoutubeDL(opts) as downloader:
+                downloader.download([url])
+        except yt_dlp.utils.DownloadError as exc:
+            message = str(exc).lower()
+            if "sign in to confirm" in message or "not a bot" in message:
+                raise RuntimeError(
+                    "YouTube requested account verification. For a video you are "
+                    "authorized to download, configure the private youtube.com "
+                    "cookies.txt file (see Settings -> YouTube URL imports) "
+                    "and select Resume job in Activity. Alternatively, obtain "
+                    "the original video through YouTube Studio and upload its MP4. "
+                    "Authentication cookies may expire or still be rejected."
+                ) from exc
+            raise
     matches = sorted(
         path for path in output_dir.glob("source.*")
         if path.is_file() and path.suffix.lower() not in {".part", ".ytdl", ".json"}
