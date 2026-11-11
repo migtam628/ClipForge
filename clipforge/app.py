@@ -358,13 +358,40 @@ def recover_interrupted_jobs() -> None:
         try:
             with LOCK:
                 job = _read(folder)
-                if job.get("status") not in ACTIVE_STATES:
-                    continue
-                job.update(status="queued", error=None,
-                           resume_count=job.get("resume_count", 0) + 1)
-                _write(folder, job)
-                POOL.submit(_process, folder)
-                LOGGER.info("Requeued interrupted ClipForge job %s", folder.name)
+                if job.get("status") in ACTIVE_STATES:
+                    job.update(status="queued", error=None,
+                               resume_count=job.get("resume_count", 0) + 1)
+                    _write(folder, job)
+                    POOL.submit(_process, folder)
+                    LOGGER.info("Requeued interrupted ClipForge job %s", folder.name)
+                elif job.get("status") == "completed":
+                    dirty = False
+                    for clip in job.get("clips", []):
+                        if clip.get("revision_state") not in {"queued", "rendering"}:
+                            continue
+                        request = clip.get("revision_request")
+                        if not isinstance(request, dict):
+                            clip.update(
+                                revision_state="failed",
+                                revision_error="Interrupted revision has no saved edit request",
+                            )
+                        elif request.get("voiceover"):
+                            # Never automatically retry a potentially billed API operation.
+                            clip.update(
+                                revision_state="failed",
+                                revision_error=(
+                                    "Interrupted voiceover generation. Original clip "
+                                    "is intact; review and submit a new edit if desired."
+                                ),
+                            )
+                        else:
+                            clip["revision_state"] = "queued"
+                            POOL.submit(
+                                _edit_clip_worker, folder, clip["number"], request,
+                            )
+                        dirty = True
+                    if dirty:
+                        _write(folder, job)
         except (OSError, ValueError, KeyError):
             LOGGER.exception("Unable to recover job %s", folder.name)
 
