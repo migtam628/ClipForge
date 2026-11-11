@@ -6,7 +6,10 @@ services:
     environment:
       CLIPFORGE_DATA_DIR: /data
     volumes:
-      - ./clipforge-data:/data
+      - clipforge_data:/data
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  clipforge_data:
