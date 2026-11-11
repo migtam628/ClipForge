@@ -16,13 +16,14 @@
       <a class="nav-link" data-page="studio" href="/studio"><span class="nav-icon">▦</span><span>Studio</span></a>
       <a class="nav-link" data-page="library" href="/library"><span class="nav-icon">▤</span><span>Clip Library</span></a>
       <a class="nav-link" data-page="publishing" href="/publishing"><span class="nav-icon">↗</span><span>Publishing</span></a>
+      <a class="nav-link" data-page="analytics" href="/analytics"><span class="nav-icon">◫</span><span>Analytics</span></a>
       <a class="nav-link" data-page="activity" href="/activity"><span class="nav-icon">◷</span><span>Activity</span></a>
     </nav>
     <div class="section-label nav-secondary-label">PREFERENCES</div>
     <nav><a class="nav-link" data-page="settings" href="/settings"><span class="nav-icon">⚙</span><span>Settings</span></a></nav>
     <div class="sidebar-bottom">
       <div class="sidebar-card"><div class="sidebar-card-title">Your editing workspace</div><p>Clips, scripts, previews, and publishing in one private studio.</p></div>
-      <div class="footer-note"><span class="status-dot"></span> Private server <span class="version">0.3 preview</span></div>
+      <div class="footer-note"><span class="status-dot"></span> Private server <span class="version">0.8 preview</span></div>
     </div>
   </aside>
   <main>
@@ -93,6 +94,80 @@
         <div class="stats-row" id="activity-stats"></div>
         <div id="activity-batches" class="batch-summary"></div>
         <div id="jobs-activity" class="jobs"></div>
+      </section>
+
+      <section id="view-analytics" class="page-view" hidden>
+        <div class="page-heading">
+          <div>
+            <div class="eyebrow">CREATOR PERFORMANCE</div>
+            <h1>Content &amp; <span>Earnings.</span></h1>
+            <p class="lede">Track posted clips, engagement, campaign approvals and actual payouts—without inventing views or earnings.</p>
+          </div>
+          <a class="small-action primary-action" href="/api/analytics/export">⇩ Export records (CSV)</a>
+        </div>
+        <p class="analytics-disclaimer"><strong>Self-reported data.</strong> These metrics are entered manually and have not been verified with YouTube, Meta, TikTok or other platform APIs. Earnings represent amounts you report, not predictions.</p>
+        <div id="analytics-stats" class="stats-row"></div>
+        <div class="analytics-layout">
+          <section class="settings-card analytics-entry-card">
+            <h2>Record performance snapshot</h2>
+            <p>Enter the latest totals for a post. A new snapshot replaces the older snapshot in your dashboard without deleting its history.</p>
+            <form id="analytics-form" class="analytics-form">
+              <label for="analytics-platform">Social platform</label>
+              <select id="analytics-platform" required>
+                <option value="youtube">YouTube</option>
+                <option value="instagram">Instagram</option>
+                <option value="facebook">Facebook</option>
+                <option value="tiktok">TikTok</option>
+                <option value="x">X / Twitter</option>
+                <option value="threads">Threads</option>
+                <option value="snapchat">Snapchat</option>
+                <option value="other">Other</option>
+              </select>
+              <label for="analytics-clip">ClipForge clip (optional)</label>
+              <select id="analytics-clip"><option value="">External post / no associated clip</option></select>
+              <label for="analytics-post-url">Post URL (required if no clip)</label>
+              <input id="analytics-post-url" type="url" placeholder="https://..." autocomplete="url">
+              <div class="analytics-numbers">
+                <label>Views<input id="analytics-views" type="number" min="0" max="2000000000" value="0"></label>
+                <label>Likes<input id="analytics-likes" type="number" min="0" max="2000000000" value="0"></label>
+                <label>Comments<input id="analytics-comments" type="number" min="0" max="2000000000" value="0"></label>
+                <label>Shares<input id="analytics-shares" type="number" min="0" max="2000000000" value="0"></label>
+                <label>Saves<input id="analytics-saves" type="number" min="0" max="2000000000" value="0"></label>
+                <label>Actual earnings (USD)<input id="analytics-earnings" type="number" min="0" step="0.01" value="0.00"></label>
+              </div>
+              <label for="analytics-campaign">Campaign or clipping program (optional)</label>
+              <input id="analytics-campaign" maxlength="100" placeholder="Campaign name">
+              <label for="analytics-campaign-status">Submission / approval status</label>
+              <select id="analytics-campaign-status">
+                <option value="none">Not a campaign</option>
+                <option value="submitted">Submitted</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="paid">Paid</option>
+              </select>
+              <label for="analytics-evidence">Evidence link (optional)</label>
+              <input id="analytics-evidence" type="url" placeholder="https://...">
+              <label for="analytics-notes">Notes (optional)</label>
+              <textarea id="analytics-notes" rows="2" maxlength="500" placeholder="Payout reference, approval details, platform date..."></textarea>
+              <button id="analytics-submit" class="create-button" type="submit">Save metric snapshot</button>
+            </form>
+          </section>
+          <section class="analytics-results">
+            <div class="settings-card">
+              <div class="analytics-heading"><h2>Performance by platform</h2><button type="button" class="refresh" id="analytics-refresh">↻ Refresh</button></div>
+              <div id="analytics-platform-results"></div>
+            </div>
+            <div class="settings-card">
+              <h2>Recent tracked posts</h2>
+              <div id="analytics-records"></div>
+            </div>
+            <div class="settings-card">
+              <h2>Internal publication outcomes</h2>
+              <p>Based only on ClipForge's saved provider responses. Processing status is not proof of reach or earnings.</p>
+              <div id="analytics-publication-states"></div>
+            </div>
+          </section>
+        </div>
       </section>
 
       <section id="view-settings" class="page-view" hidden>
