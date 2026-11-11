@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clipforge-studio"
-version = "0.4.1"
+version = "0.5.0"
 description = "Self-hosted URL-to-short-video clipping studio"
 readme = "README.md"
 requires-python = ">=3.11"

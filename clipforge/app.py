@@ -349,6 +349,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "script": script, "voiceover_added": voiceover is not None,
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
+                    "face_tracking": smart_track is not None,
                     **candidate,
                 })
             _patch(folder, clips=clips, progress=max(
@@ -439,8 +440,8 @@ def get_settings():
     saved = load_json(DATA_DIR / "settings.json")
     try:
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
-            selection_mode="ai", caption_style="bold", effect="pop",
-            framing="crop", max_clips=5, hook_style="headline",
+            selection_mode="ai", caption_style="karaoke", effect="pop",
+            framing="smart", max_clips=5, hook_style="headline",
         )
     except ValueError:
         defaults = Options()
@@ -659,6 +660,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",
                 voiceover_added=voiceover is not None,
+                face_tracking=smart_track is not None,
                 narration="narrated" if voiceover else ("script" if edit.script.strip() else "none"),
                 script=edit.script.strip() or None,
                 revision_count=version, revision_history=history,
