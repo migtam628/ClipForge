@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.2.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.3.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## What it does
 
@@ -11,6 +11,62 @@
 - **AI-assisted editing**: automatic timed captions (classic white, bold yellow, neon pink); color/effect presets (natural, vibrant pop, cinematic, black-and-white); optional crop-to-fill or full-frame padding at 9:16, 16:9 or 1:1. FFmpeg/libass creates the actual MP4 output. AI ranking and clipping remain imperfect; verify each clip before posting.
 - **Creator review**: browse job progress, previews, thumbnails, captions/effects badges, and AI-generated titles, then download MP4 or bulk ZIP.
 - **Social publishing**: after reviewing each clip, explicitly authorize transfer to connected YouTube Shorts, Instagram Reels and Facebook Page Reels, or send a draft to the TikTok inbox for final posting. Platforms may restrict access or require developer approval.
+
+## Workspace navigation
+
+ClipForge now has **five distinct page URLs** with real navigation:
+
+- `/studio` - import video, select 1/2/3/5/10/25/50/100 or a custom clip limit, configure edits and optional commentary.
+- `/library` - view completed clips, read/copy narrator scripts, preview and download.
+- `/publishing` - see platform connection status, review and explicitly approve each upload.
+- `/activity` - processing queue, stage progress, error diagnostics and Resume job.
+- `/settings` - persistent non-secret Studio defaults, AI/voice status, publishing connections and storage/security guidance.
+
+Settings save to the persistent `clipforge_data` Docker volume. New jobs inherit
+the current Studio defaults; existing jobs and previously generated clips are not changed.
+API limits remain 1-100 clips, with 1/3/5 among the new visual presets.
+
+## AI commentator and narrated clips
+
+Choose one of three narration modes in **Studio**:
+
+1. **Original audio only** - no script and no TTS usage.
+2. **Generate AI script** - Ollama writes a short English or Spanish commentary
+   derived from the actual speech transcript in each selected video segment.
+   The script appears in the Library; no external voice service is called.
+3. **AI script + commentator voice** - also sends the generated script to
+   ElevenLabs text-to-speech, mixes it into the video with quiet original
+   audio (18% of source), and burns approximate script-aligned captions when
+   captions are enabled. Style can be Energetic, Documentary, or Casual.
+
+Configure voiceover with an ElevenLabs API key and an authorized voice ID
+from your account. Add to the untracked server `.env`:
+
+```env
+CLIPFORGE_ELEVENLABS_API_KEY=YOUR_PERSONAL_API_KEY
+CLIPFORGE_ELEVENLABS_VOICE_ID=YOUR_AUTHORIZED_VOICE_ID
+CLIPFORGE_ELEVENLABS_MODEL=eleven_multilingual_v2
+```
+
+Do not paste real credentials into GitHub, screenshots or this chat.
+Recreate the ClipForge container after editing `.env`:
+`docker compose --profile ai up -d --force-recreate clipforge`.
+The Studio will display whether ElevenLabs is connected. Use Script-only mode
+until voiceover is configured. ElevenLabs requests require Internet access,
+can incur provider charges, and are **not automatically retried** after ambiguous
+network failures to avoid duplicate billable requests. Source media stays local;
+only generated narration text is transmitted to ElevenLabs when voiceover is
+explicitly enabled. Ollama uses the local Docker network.
+
+**Editorial limitations:** Generated scripts summarize the selected spoken
+excerpt, not independent fact-checked research. The model can still make
+mistakes; review scripts and videos before publishing. TTS caption timestamps
+are approximate, not word-level aligned. Very long narrations may be
+trimmed to clip duration. Existing completed jobs are not automatically
+rewritten or re-narrated by this release.
+
+The direct API contract follows the
+[ElevenLabs text-to-speech endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/convert).
 
 ## Docker (recommended)
 
@@ -72,7 +128,7 @@ Both ClipForge and its AI service remain private to Docker/Tailscale. Tailscale 
 
 ## Connect social publishing
 
-ClipForge 0.2 uses server-side credentials. **Browser-based account OAuth connection and token refresh management screens are not implemented yet.** Obtain approved credentials from your own platform developer applications. Add the matching variables to `.env` (never commit it); Compose maps them to the ClipForge process. Recreate the ClipForge container to apply changes: `docker compose --profile ai up -d --force-recreate clipforge` (or the matching Tailscale Compose command).
+ClipForge uses server-side credentials. **Browser-based account OAuth connection and token refresh management screens are not implemented yet.** Obtain approved credentials from your own platform developer applications. Add the matching variables to `.env` (never commit it); Compose maps them to the ClipForge process. Recreate the ClipForge container to apply changes: `docker compose --profile ai up -d --force-recreate clipforge` (or the matching Tailscale Compose command).
 
 | Destination | Supported result | Environment variables |
 | --- | --- | --- |
@@ -121,8 +177,10 @@ Keep Docker volumes; do not run `docker compose down -v`.
 API schema: `/api/docs`.
 
 - `POST /api/jobs`: `{ "url": "https://...", "rights_confirmed": true, "clip_seconds": 30, "max_clips": 25, "aspect_ratio": "9:16", "selection_mode": "ai", "caption_style": "bold", "effect": "pop", "framing": "crop" }`
+- Optional job fields: `"narration": "none" | "script" | "narrated"`, `"narration_style": "energetic" | "documentary" | "casual"`, `"narration_language": "en" | "es"`.
 - `POST /api/uploads`: multipart file plus the same options, separately.
 - `GET /api/jobs`, `/api/jobs/{id}`, `/api/ai/status`, `/api/publishing/platforms`.
+- `GET /api/settings` returns safe defaults and config status; `PUT /api/settings` saves validated non-secret `Options`.
 - `GET /api/jobs/{id}/clips/{filename}`; `GET /api/jobs/{id}/export`.
 - `POST /api/jobs/{id}/publish`: `{ "filename": "clip-001.mp4", "platform": "youtube", "title": "My short", "description": "#shorts", "visibility": "private", "approved": true }`. Requires a completed job, a clip that belongs to it, and configured server credentials.
 - `DELETE /api/jobs/{id}` (only when processing/publishing is not ongoing).
@@ -138,7 +196,7 @@ pytest -q
 python -m build
 ```
 
-GitHub Actions checks Python 3.11/3.12, FFmpeg integration media renders, mocked publishing adapters, Docker Compose syntax, package artifacts and a Docker smoke test. A push to `main` publishes `v0.2.0-preview.<run-number>` **only after** tests and image checks succeed. External publishing is not exercised by CI. Check [Actions](https://github.com/migtam628/ClipForge/actions) and [Releases](https://github.com/migtam628/ClipForge/releases).
+GitHub Actions checks Python 3.11/3.12, FFmpeg integration media renders, mocked publishing adapters, Docker Compose syntax, package artifacts and a Docker smoke test. A push to `main` publishes `v0.3.0-preview.<run-number>` **only after** tests and image checks succeed. External publishing is not exercised by CI. Check [Actions](https://github.com/migtam628/ClipForge/actions) and [Releases](https://github.com/migtam628/ClipForge/releases).
 
 ## Security and limits
 
