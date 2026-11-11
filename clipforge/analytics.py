@@ -107,7 +107,7 @@ def safe_csv(records: list[dict]) -> str:
         for field in fields:
             value = str(row.get(field, ""))
             if value.lstrip().startswith(("=", "+", "-", "@")):
-                value = "'" + value
+                value = "'" + value.lstrip()
             cells.append(value)
         writer.writerow(cells)
     return output.getvalue()

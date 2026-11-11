@@ -116,8 +116,7 @@ def test_export_disarms_formula_names_and_notes():
         "notes": " @dangerous_formula", "earnings_usd": "1.00",
     }])
     assert "'=HYPERLINK(bad)" in csv_data
-    assert "' @dangerous_formula" not in csv_data
-    assert " ' @dangerous_formula" not in csv_data
+    assert "'@dangerous_formula" in csv_data
 
 
 def test_dashboard_contains_earnings_and_campaign_status_controls():
