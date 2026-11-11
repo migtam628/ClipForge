@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.7.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.8.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
@@ -95,6 +95,38 @@ New API routes: `POST /api/jobs/{id}/schedule`, `GET
 /api/publishing/queue`, `POST /api/jobs/{id}/publications/{pub_id}/cancel`,
 `POST /api/jobs/{id}/publications/{pub_id}/reapprove` (explicit duplicate
 check), and `GET/PUT /api/publishing/presets`.
+
+## Creator analytics, clipping campaigns and reported earnings (v0.8)
+
+The new **Analytics** page provides a durable performance ledger for clips
+published through ClipForge **or** an external editor. Enter the metrics you
+actually see in a platform's dashboard: views, likes, comments, shares, saves,
+and **actual USD payouts received**. Save campaign/program names, the
+submission status (`submitted`, `approved`, `rejected`, `paid`),
+a post URL, an evidence link, and notes.
+
+- All metrics are **self-reported manual snapshots**, not remotely verified,
+  inferred, scraped or auto-synced from social networks. The UI displays
+  this provenance prominently. The dashboard does **not** estimate payouts.
+- Each new snapshot for the same platform/post supersedes the previous
+  snapshot in headline totals; earlier snapshots remain in history. This
+  prevents double-counting views and earnings.
+- Attach a snapshot to a saved clip or to an external HTTPS post URL.
+  A platform-specific post identity prevents cross-platform merging.
+- Summary cards show tracked posts, reported views/engagements, and actual
+  self-reported payouts. Platform breakdowns and campaign outcome counts
+  are computed only from the latest submitted snapshots.
+- Saved ClipForge publication states are shown separately; a provider
+  "published" response is not treated as evidence of views or income.
+- Export all records as CSV with spreadsheet-formula safeguards; delete
+  mistaken snapshots without deleting your videos. Stored in the existing
+  ClipForge data volume, capped at 5,000 snapshots.
+
+API: `POST/GET /api/analytics/records`, `DELETE
+/api/analytics/records/{id}`, `GET /api/analytics/summary`, `GET
+/api/analytics/export`. Adding automatic API-driven performance sync will
+require provider permission review and verified account connections in a
+future phase. No fake metrics or projected revenue have been added.
 
 ## What it does
 
