@@ -53,6 +53,7 @@ MAX_BATCH_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 MAX_QUEUED_SOURCES = 125
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
+PUBLISH_STOP = threading.Event()
 LOCK = threading.RLock()
 STATIC = Path(__file__).resolve().parent / "static"
 LOGGER = logging.getLogger("uvicorn.error")
@@ -62,9 +63,20 @@ ACTIVE_STATES = {"queued", "downloading", "analyzing", "transcribing", "selectin
 
 @asynccontextmanager
 async def lifespan(_application: FastAPI):
-    """Requeue jobs interrupted by a container restart; failed jobs need approval."""
+    """Recover local jobs, then run the persistent approved-publication scheduler."""
     recover_interrupted_jobs()
-    yield
+    recover_interrupted_publications()
+    PUBLISH_STOP.clear()
+    _dispatch_due_publications()
+    schedule_thread = threading.Thread(
+        target=_publishing_clock, name="clipforge-publications", daemon=True,
+    )
+    schedule_thread.start()
+    try:
+        yield
+    finally:
+        PUBLISH_STOP.set()
+        schedule_thread.join(timeout=3)
 
 
 app = FastAPI(
@@ -111,6 +123,32 @@ class ClipEditRequest(BaseModel):
     script: str = Field(default="", max_length=1200)
     voiceover: bool = False
     voiceover_approved: bool = False
+
+
+class ScheduledPublishRequest(BaseModel):
+    filename: str = Field(min_length=8, max_length=80)
+    platforms: list[Literal["youtube", "instagram", "facebook", "tiktok"]] = Field(
+        min_length=1, max_length=4,
+    )
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=2200)
+    visibility: Literal["private", "unlisted", "public"] = "private"
+    scheduled_at: datetime
+    approved: bool = False
+
+
+class PublishPreset(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    platforms: list[Literal["youtube", "instagram", "facebook", "tiktok"]] = Field(
+        min_length=1, max_length=4,
+    )
+    visibility: Literal["private", "unlisted", "public"] = "private"
+    description: str = Field(default="", max_length=2200)
+
+
+class ReapproveRequest(BaseModel):
+    approved: bool = False
+    duplicate_checked: bool = False
 
 
 class PublishRequest(BaseModel):
@@ -944,6 +982,205 @@ def _publish_worker(folder: Path, pub_id: str, platform: str, path: Path,
         LOGGER.exception("ClipForge publication %s failed", pub_id)
         _publication_update(folder, pub_id, state="failed",
                             error=f"{type(exc).__name__}: {str(exc)[:350]}")
+
+
+def recover_interrupted_publications() -> None:
+    """Unknown remote status must never be retried automatically."""
+    for file in DATA_DIR.glob("*/job.json"):
+        try:
+            with LOCK:
+                job = _read(file.parent)
+                changed = False
+                for publication in job.get("publications", []):
+                    if publication.get("state") in {"uploading", "queued"}:
+                        publication.update(
+                            state="needs_review",
+                            error=("Server restarted while an upload was pending. "
+                                   "Check the external platform before retrying; "
+                                   "the upload may already have succeeded."),
+                        )
+                        changed = True
+                if changed:
+                    _write(file.parent, job)
+        except (OSError, ValueError, KeyError):
+            LOGGER.warning("Unable to recover publication in job %s", file.parent.name)
+
+
+def _dispatch_due_publications(now: datetime | None = None) -> int:
+    """Atomically claim approved schedules, then submit to one outbound worker."""
+    current = now or datetime.now(timezone.utc)
+    dispatched = []
+    for file in DATA_DIR.glob("*/job.json"):
+        folder = file.parent
+        try:
+            with LOCK:
+                job = _read(folder)
+                changed = False
+                for pub in job.get("publications", []):
+                    if pub.get("state") != "scheduled" or pub.get("approved") is not True:
+                        continue
+                    try:
+                        due = datetime.fromisoformat(pub["scheduled_at"])
+                        if due.tzinfo is None or due > current:
+                            continue
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    # Mark claimed BEFORE submitting to prevent duplicate queues.
+                    pub.update(
+                        state="queued", queued_at=current.isoformat(), error=None,
+                    )
+                    dispatched.append((
+                        folder, pub["id"], pub["platform"],
+                        folder / "clips" / pub["filename"], pub["title"],
+                        pub.get("description", ""), pub.get("visibility", "private"),
+                    ))
+                    changed = True
+                if changed:
+                    _write(folder, job)
+        except (OSError, ValueError, KeyError):
+            LOGGER.warning("Unable to inspect scheduled job %s", folder.name)
+    for args in dispatched:
+        PUBLISH_POOL.submit(_publish_worker, *args)
+    return len(dispatched)
+
+
+def _publishing_clock() -> None:
+    """Low-overhead scheduler: preserves future schedules across restarts."""
+    while not PUBLISH_STOP.wait(15):
+        try:
+            _dispatch_due_publications()
+        except Exception:
+            LOGGER.exception("Scheduled publishing scan failed")
+
+
+@app.post("/api/jobs/{job_id}/schedule", status_code=202)
+def schedule_clip(job_id: str, body: ScheduledPublishRequest):
+    """Explicitly authorize specific stored MP4 for specified future platforms."""
+    if not body.approved:
+        raise HTTPException(400, "Approve each scheduled external platform transfer")
+    if len(set(body.platforms)) != len(body.platforms):
+        raise HTTPException(422, "Select each platform at most once")
+    now = datetime.now(timezone.utc)
+    due = body.scheduled_at
+    if due.tzinfo is None:
+        raise HTTPException(422, "Scheduled time must include a timezone")
+    due = due.astimezone(timezone.utc)
+    if not (60 <= (due - now).total_seconds() <= 30 * 86400):
+        raise HTTPException(422, "Choose a time 1 minute to 30 days in the future")
+    available = {p["id"] for p in platform_status() if p["configured"]}
+    if any(p not in available for p in body.platforms):
+        raise HTTPException(409, "One or more selected platforms are not configured")
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        if job.get("status") != "completed":
+            raise HTTPException(409, "Complete clip generation before scheduling")
+        if body.filename not in {c["filename"] for c in job["clips"]}:
+            raise HTTPException(404, "Clip is not the active version in this job")
+        if not (folder / "clips" / body.filename).is_file():
+            raise HTTPException(404, "Rendered MP4 is missing")
+        if len(job.get("publications", [])) + len(body.platforms) > 100:
+            raise HTTPException(429, "Publishing history limit reached")
+        created = []
+        for platform in body.platforms:
+            id = uuid.uuid4().hex
+            job.setdefault("publications", []).append({
+                "id": id, "platform": platform, "filename": body.filename,
+                "title": body.title.strip(), "description": body.description,
+                "visibility": body.visibility, "state": "scheduled",
+                "scheduled_at": due.isoformat(), "approved": True,
+                "approved_at": now.isoformat(), "created_at": now.isoformat(),
+            })
+            created.append(id)
+        _write(folder, job)
+    return {
+        "publication_ids": created, "platforms": body.platforms,
+        "state": "scheduled", "scheduled_at": due.isoformat(),
+    }
+
+
+@app.get("/api/publishing/queue")
+def scheduled_queue():
+    """Persisted metadata only; no credentials or private provider responses."""
+    results = []
+    for job in list_jobs():
+        for pub in job.get("publications", []):
+            if pub.get("state") not in {"scheduled", "queued", "uploading", "needs_review"}:
+                continue
+            results.append({
+                "job_id": job["id"], "id": pub["id"],
+                "platform": pub["platform"], "filename": pub["filename"],
+                "title": pub["title"], "state": pub["state"],
+                "scheduled_at": pub.get("scheduled_at"),
+            })
+    return sorted(results, key=lambda x: x["scheduled_at"] or "")
+
+
+@app.post("/api/jobs/{job_id}/publications/{pub_id}/cancel")
+def cancel_scheduled_publication(job_id: str, pub_id: str):
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        pub = next((p for p in job.get("publications", []) if p["id"] == pub_id), None)
+        if pub is None:
+            raise HTTPException(404, "Publication not found")
+        if pub.get("state") != "scheduled":
+            raise HTTPException(409, "Only a future scheduled publication can be canceled")
+        pub.update(state="canceled", canceled_at=datetime.now(timezone.utc).isoformat())
+        _write(folder, job)
+    return {"id": pub_id, "state": "canceled"}
+
+
+@app.post("/api/jobs/{job_id}/publications/{pub_id}/reapprove", status_code=202)
+def reapprove_publication(job_id: str, pub_id: str, body: ReapproveRequest):
+    """Never retry an uncertain provider upload without fresh duplicate-risk consent."""
+    if not body.approved or not body.duplicate_checked:
+        raise HTTPException(400, "Check the platform and acknowledge possible duplicate posts")
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        pub = next((p for p in job.get("publications", []) if p["id"] == pub_id), None)
+        if pub is None:
+            raise HTTPException(404, "Publication not found")
+        if pub.get("state") not in {"needs_review", "failed"}:
+            raise HTTPException(409, "Only failed or uncertain uploads can be reviewed")
+        if not (folder / "clips" / pub["filename"]).is_file():
+            raise HTTPException(404, "Saved media no longer exists")
+        if pub["platform"] not in {
+            p["id"] for p in platform_status() if p["configured"]
+        }:
+            raise HTTPException(409, "The platform is not configured")
+        pub.update(state="queued", error=None,
+                   approved_at=datetime.now(timezone.utc).isoformat(),
+                   reapproval_count=pub.get("reapproval_count", 0) + 1)
+        _write(folder, job)
+        args = (
+            folder, pub_id, pub["platform"], folder / "clips" / pub["filename"],
+            pub["title"], pub.get("description", ""), pub.get("visibility", "private"),
+        )
+    PUBLISH_POOL.submit(_publish_worker, *args)
+    return {"id": pub_id, "state": "queued"}
+
+
+@app.get("/api/publishing/presets")
+def get_publishing_presets():
+    data = load_json(DATA_DIR / "publishing-presets.json")
+    return data if isinstance(data, list) else []
+
+
+@app.put("/api/publishing/presets")
+def upsert_publishing_preset(preset: PublishPreset):
+    """Non-secret text/target presets: never stores account tokens."""
+    selected = preset.model_dump()
+    selected["platforms"] = list(dict.fromkeys(selected["platforms"]))
+    with LOCK:
+        data = get_publishing_presets()
+        data = [x for x in data if x.get("name") != preset.name]
+        if len(data) >= 10:
+            raise HTTPException(429, "Maximum 10 publishing presets")
+        data.append(selected)
+        save_json(DATA_DIR / "publishing-presets.json", data)
+    return selected
 
 
 @app.post("/api/jobs/{job_id}/publish", status_code=202)

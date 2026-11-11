@@ -2,6 +2,7 @@ const $ = (id) => document.getElementById(id);
 let activeTab = 'url';
 let polling = false;
 let platforms = [];
+let publishingPresets = [];
 const validPages = ['studio', 'library', 'publishing', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
@@ -446,6 +447,132 @@ function card(job, mode = currentPage) {
             panel.hidden = !panel.hidden;
           });
           description.append(publishButton, panel);
+
+          const scheduleButton = el('button', 'publish-button schedule-button',
+            '◷ Schedule to multiple platforms');
+          const schedulePanel = el('div', 'publish-panel schedule-panel');
+          schedulePanel.hidden = true;
+
+          const platformBoxes = el('div', 'schedule-platforms');
+          for (const p of available) {
+            const option = el('label', 'schedule-platform-option');
+            const input = el('input');
+            input.type = 'checkbox';
+            input.value = p.id;
+            option.append(input, el('span', '', p.name));
+            platformBoxes.append(option);
+          }
+          const scheduledTitle = el('input');
+          scheduledTitle.maxLength = 100;
+          scheduledTitle.value = clip.title || 'Clip ' + clip.number;
+          scheduledTitle.placeholder = 'Publication title';
+
+          const scheduledDescription = el('textarea');
+          scheduledDescription.rows = 2;
+          scheduledDescription.maxLength = 2200;
+          scheduledDescription.placeholder = 'Optional description / hashtags';
+          const scheduledVisibility = el('select');
+          for (const v of ['private', 'unlisted', 'public']) {
+            const option = el('option', '', 'YouTube: ' + v);
+            option.value = v;
+            scheduledVisibility.append(option);
+          }
+          const scheduledTime = el('input');
+          scheduledTime.type = 'datetime-local';
+          scheduledTime.required = true;
+          scheduledTime.setAttribute('aria-label', 'Scheduled local date and time');
+          const scheduleGuidance = el('p', 'helper-note',
+            'Approved uploads run at approximately the selected local time. TikTok receives an inbox draft, not a public post. Already-published files are not replaced by later edits.');
+
+          const presetSelect = el('select');
+          presetSelect.append(el('option', '', 'Choose a saved preset (optional)'));
+          for (const preset of publishingPresets) {
+            const option = el('option', '', preset.name);
+            option.value = preset.name;
+            presetSelect.append(option);
+          }
+          const selectedPlatforms = () => [...platformBoxes.querySelectorAll('input:checked')]
+            .map((input) => input.value);
+          presetSelect.addEventListener('change', () => {
+            const preset = publishingPresets.find((item) => item.name === presetSelect.value);
+            if (!preset) return;
+            for (const input of platformBoxes.querySelectorAll('input'))
+              input.checked = preset.platforms.includes(input.value);
+            scheduledDescription.value = preset.description || '';
+            scheduledVisibility.value = preset.visibility || 'private';
+          });
+
+          const savePreset = el('button', 'small-action', 'Save platform preset');
+          savePreset.type = 'button';
+          savePreset.addEventListener('click', async () => {
+            const selected = selectedPlatforms();
+            if (!selected.length) return notify('Choose at least one platform.');
+            const name = prompt('Name this reusable platform preset (max 50 characters):');
+            if (!name || !name.trim()) return;
+            try {
+              const res = await fetch('/api/publishing/presets', {
+                method: 'PUT', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                  name: name.trim(), platforms: selected,
+                  description: scheduledDescription.value,
+                  visibility: scheduledVisibility.value
+                })
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(typeof data.detail === 'string'
+                ? data.detail : 'Could not save preset');
+              publishingPresets = publishingPresets.filter((p) => p.name !== data.name);
+              publishingPresets.push(data);
+              notify('Publishing preset saved. Available on the next refresh.');
+            } catch (err) { notify(err.message); }
+          });
+
+          const scheduleSubmit = el('button', 'publish-submit', 'Approve and schedule uploads');
+          scheduleSubmit.type = 'button';
+          scheduleSubmit.addEventListener('click', async () => {
+            const selected = selectedPlatforms();
+            if (!selected.length) return notify('Select one or more connected platforms.');
+            if (!scheduledTitle.value.trim()) return notify('Enter a title.');
+            if (!scheduledTime.value) return notify('Choose a scheduled date and time.');
+            const when = new Date(scheduledTime.value);
+            if (Number.isNaN(when.getTime()) || when.getTime() < Date.now() + 60000)
+              return notify('Schedule at least one minute into the future.');
+            const names = available.filter((p) => selected.includes(p.id)).map((p) => p.name).join(', ');
+            if (!confirm('Approve ' + clip.filename + ' for ' + names + ' on ' +
+              when.toLocaleString() + '? The server will send the video automatically.')) return;
+            scheduleSubmit.disabled = true;
+            try {
+              const response = await fetch('/api/jobs/' + job.id + '/schedule', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                  filename: clip.filename, platforms: selected,
+                  title: scheduledTitle.value.trim(), description: scheduledDescription.value,
+                  visibility: scheduledVisibility.value, scheduled_at: when.toISOString(),
+                  approved: true
+                })
+              });
+              const result = await response.json();
+              if (!response.ok) throw new Error(
+                typeof result.detail === 'string' ? result.detail : 'Schedule was rejected');
+              notify('Scheduled ' + selected.length + ' approved platform transfers.');
+              schedulePanel.hidden = true;
+              await refresh();
+            } catch (err) { notify(err.message); }
+            finally { scheduleSubmit.disabled = false; }
+          });
+          schedulePanel.append(
+            el('label', '', 'Publishing preset'), presetSelect,
+            el('label', '', 'Select destinations'), platformBoxes,
+            el('label', '', 'Title'), scheduledTitle,
+            el('label', '', 'Description'), scheduledDescription,
+            el('label', '', 'YouTube visibility'), scheduledVisibility,
+            el('label', '', 'Scheduled time (your local timezone)'), scheduledTime,
+            scheduleGuidance, savePreset, scheduleSubmit,
+          );
+          scheduleButton.addEventListener('click', () => {
+            schedulePanel.hidden = !schedulePanel.hidden;
+          });
+          description.append(scheduleButton, schedulePanel);
         } else {
           description.append(el('small', 'publish-guidance',
             'Connect a platform in your server configuration to enable approved uploads.'));
@@ -458,13 +585,43 @@ function card(job, mode = currentPage) {
       const posts = (job.publications || []).filter((p) => p.filename === clip.filename);
       for (const post of posts) {
         const status = el('p', 'publication-status',
-          `${post.platform}: ${post.state}${post.error ? ' · ' + post.error : ''}`);
+          `${post.platform}: ${post.state}${post.scheduled_at ? ' · ' + new Date(post.scheduled_at).toLocaleString() : ''}${post.error ? ' · ' + post.error : ''}`);
         if (post.url) {
           const linkPost = el('a', '', 'View on platform ↗');
           linkPost.href = post.url;
           linkPost.target = '_blank';
           linkPost.rel = 'noopener noreferrer';
           status.append(' ', linkPost);
+        }
+        if (post.state === 'scheduled') {
+          const cancel = el('button', 'small-action cancel-schedule', 'Cancel scheduled upload');
+          cancel.type = 'button';
+          cancel.addEventListener('click', async () => {
+            if (!confirm('Cancel the scheduled transfer to ' + post.platform + '?')) return;
+            const res = await fetch('/api/jobs/' + job.id + '/publications/' +
+                                    post.id + '/cancel', {method: 'POST'});
+            if (!res.ok) return notify('Cannot cancel; it may already be sending.');
+            notify('Scheduled upload canceled.');
+            await refresh();
+          });
+          status.append(' ', cancel);
+        }
+        if (post.state === 'needs_review' || post.state === 'failed') {
+          const retry = el('button', 'small-action cancel-schedule', 'Review and retry');
+          retry.type = 'button';
+          retry.addEventListener('click', async () => {
+            if (!confirm('First check ' + post.platform + ' for an existing upload. Continue only if you accept the risk of a duplicate post.')) return;
+            if (!confirm('I checked the platform and approve retrying this upload, even if it creates a duplicate.')) return;
+            const response = await fetch('/api/jobs/' + job.id + '/publications/' +
+              post.id + '/reapprove', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({approved: true, duplicate_checked: true})
+              });
+            if (!response.ok) return notify('Retry was rejected. Check server configuration.');
+            notify('Approved retry submitted to publishing queue.');
+            await refresh();
+          });
+          status.append(' ', retry);
         }
         description.append(status);
       }
@@ -508,11 +665,14 @@ async function refresh() {
   const target = $(currentPage === 'library' ? 'jobs-library' :
                    currentPage === 'publishing' ? 'jobs-publishing' : 'jobs-activity');
   try {
-    const [response, platformsResponse] = await Promise.all([
+    const [response, platformsResponse, presetsResponse] = await Promise.all([
       fetch('/api/jobs', {cache: 'no-store'}),
-      fetch('/api/publishing/platforms', {cache: 'no-store'})
+      fetch('/api/publishing/platforms', {cache: 'no-store'}),
+      currentPage === 'publishing' ? fetch('/api/publishing/presets', {cache: 'no-store'}) : Promise.resolve(null)
     ]);
     if (platformsResponse.ok) platforms = await platformsResponse.json();
+    if (presetsResponse && presetsResponse.ok)
+      publishingPresets = await presetsResponse.json();
     if (!response.ok) throw new Error('Cannot reach ClipForge server');
     const jobs = await response.json();
     const shown = currentPage === 'library'
@@ -572,7 +732,13 @@ async function refresh() {
         group.append(item);
       }
     }
-    if (currentPage === 'publishing') renderPlatforms();
+    if (currentPage === 'publishing') {
+      renderPlatforms();
+      const scheduled = jobs.reduce((count, job) => count +
+        (job.publications || []).filter((p) => p.state === 'scheduled').length, 0);
+      $('publishing-scheduled-count').textContent =
+        scheduled + ' approved future platform transfer' + (scheduled === 1 ? '' : 's');
+    }
   } catch (err) {
     notify(err.message);
   } finally {

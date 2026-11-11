@@ -125,3 +125,16 @@ a.brand{color:inherit;text-decoration:none}
 .batch-summary-item{display:flex;flex-direction:column;gap:5px;background:#161c26;border:1px solid #383f4e;padding:13px;border-radius:9px;min-width:180px}
 .batch-summary-item strong{font-size:12px;color:#d7f5ae}
 .batch-summary-item span{font-size:11px;color:#b7c0cf}
+
+.schedule-button{margin-top:12px}
+.schedule-panel{display:flex;flex-direction:column;gap:9px}
+.schedule-panel[hidden]{display:none}
+.schedule-panel>label{font-size:11px;color:#bdc6d5;margin-top:4px}
+.schedule-panel input,.schedule-panel textarea,.schedule-panel select{
+  width:100%;background:#121722;color:#f9f9fd;border:1px solid #3b4250;
+  border-radius:8px;padding:10px;font-size:12px;box-sizing:border-box
+}
+.schedule-platforms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.schedule-platform-option{display:flex;align-items:center;gap:7px;color:#e0e5ea;font-size:11px}
+.schedule-platform-option input{width:auto;min-width:16px}
+.cancel-schedule{font-size:10px;margin-top:6px}
