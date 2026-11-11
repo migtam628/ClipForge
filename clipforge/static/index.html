@@ -1,58 +1,129 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#0d0f16" />
-  <title>ClipForge — Create more from every video</title>
-  <link rel="stylesheet" href="/assets/style.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0d0f16">
+  <title>ClipForge Studio</title>
+  <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
-  <div class="shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-icon">◈</span><span>clipforge<span class="brand-period">.</span></span></div>
-      <div class="section-label">WORKSPACE</div>
-      <nav aria-label="Primary">
-        <a class="nav-link selected" href="#create">▦ <span>Clip Studio</span></a>
-        <a class="nav-link" href="#library">▤ <span>Clip Library</span></a>
-      </nav>
-      <div class="sidebar-bottom">
-        <div class="sidebar-card"><div class="sidebar-card-title">A smarter workflow</div><p>One source. Multiple clips. Ready for your next upload.</p></div>
-        <div class="footer-note"><span class="status-dot"></span> Local workspace <span class="version">v0.2.0</span></div>
-      </div>
-    </aside>
-    <main>
-      <header class="topbar"><span>Workspace <b>/ Clip Studio</b></span><div class="top-actions"><span class="top-tag">LOCAL-FIRST</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API ↗</a></div></header>
-      <div class="main-content" id="create">
-        <div class="eyebrow">YOUR CONTENT, REIMAGINED <span class="accent-spark">✦</span></div>
-        <h1>One video.<br><span>Endless possibilities.</span></h1>
-        <p class="lede">Turn your long-form content into a library of ready-to-share clips. Add a link or upload a video and let ClipForge find the moments.</p>
+<div class="shell">
+  <aside class="sidebar" aria-label="Primary navigation">
+    <a class="brand" href="/studio"><span class="brand-icon">◈</span><span>clipforge<span class="brand-period">.</span></span></a>
+    <div class="section-label">WORKSPACE</div>
+    <nav class="main-nav" aria-label="ClipForge sections">
+      <a class="nav-link" data-page="studio" href="/studio"><span class="nav-icon">▦</span><span>Studio</span></a>
+      <a class="nav-link" data-page="library" href="/library"><span class="nav-icon">▤</span><span>Clip Library</span></a>
+      <a class="nav-link" data-page="publishing" href="/publishing"><span class="nav-icon">↗</span><span>Publishing</span></a>
+      <a class="nav-link" data-page="activity" href="/activity"><span class="nav-icon">◷</span><span>Activity</span></a>
+    </nav>
+    <div class="section-label nav-secondary-label">PREFERENCES</div>
+    <nav><a class="nav-link" data-page="settings" href="/settings"><span class="nav-icon">⚙</span><span>Settings</span></a></nav>
+    <div class="sidebar-bottom">
+      <div class="sidebar-card"><div class="sidebar-card-title">Your editing workspace</div><p>Clips, scripts, previews, and publishing in one private studio.</p></div>
+      <div class="footer-note"><span class="status-dot"></span> Private server <span class="version">0.3 preview</span></div>
+    </div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div>Workspace <span class="crumb-sep">/</span> <b id="page-crumb">Studio</b></div>
+      <div class="top-actions"><span class="top-tag">TAILNET · PRIVATE</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API reference ↗</a></div>
+    </header>
+    <div class="main-content">
+
+      <section id="view-studio" class="page-view">
+        <div class="eyebrow">CREATOR WORKSPACE <span class="accent-spark">✦</span></div>
+        <h1>From long-form to <span>scroll-stopping.</span></h1>
+        <p class="lede">Turn one video into polished short-form stories with AI highlights, bold captions, and optional narrated commentary.</p>
         <section class="creator-panel" aria-label="Create clips">
-          <div class="panel-heading"><span class="step">01</span><div><h2>Start with a video</h2><p>Paste a video link or select a local file</p></div></div>
-          <div class="tabs" role="tablist"><button type="button" class="tab active" id="url-tab" aria-selected="true">↗ Video URL</button><button type="button" class="tab" id="upload-tab" aria-selected="false">⇧ Upload video</button></div>
-          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url" /></div><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
-          <div id="upload-area" class="input-area" hidden><label for="file">Upload a file</label><div class="drop-zone"><input id="file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm" /><div class="drop-icon">⇧</div><strong>Choose a video file</strong><span>MP4 · MOV · MKV · WEBM, up to 2 GB</span></div></div>
-          <div class="settings-heading"><span class="step">02</span><div><h2>Customize your clips</h2><p>Set your preferred output and limits</p></div></div>
-          <div class="settings-grid"><div class="field"><label for="clip-seconds">Clip length</label><select id="clip-seconds"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">120 seconds</option></select></div><div class="field"><label for="max-clips">Maximum clips</label><select id="max-clips"><option value="10">10 clips</option><option value="25" selected>25 clips</option><option value="50">50 clips</option><option value="100">100 clips</option></select></div><div class="field"><label for="aspect-ratio">Video format</label><select id="aspect-ratio"><option value="9:16">9:16 · Vertical shorts</option><option value="16:9">16:9 · Widescreen</option><option value="1:1">1:1 · Square</option></select></div></div>
-          <div class="ai-heading"><span class="step">03</span><div><h2>AI editor</h2><p>Choose how ClipForge finds and finishes clips</p></div></div>
+          <div class="panel-heading"><span class="step">01</span><div><h2>Import your footage</h2><p>A video link or a file you have rights to use</p></div></div>
+          <div class="tabs" role="tablist">
+            <button type="button" class="tab active" id="url-tab" aria-selected="true">↗ Video URL</button>
+            <button type="button" class="tab" id="upload-tab" aria-selected="false">⇧ Upload file</button>
+          </div>
+          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
+          <div id="upload-area" class="input-area" hidden><label for="file">Select video file</label><div class="drop-zone"><input id="file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm"><div class="drop-icon">⇧</div><strong>Choose a video file</strong><span>MP4 · MOV · MKV · WEBM, up to 2 GB</span></div></div>
+          <div class="settings-heading"><span class="step">02</span><div><h2>Clip settings</h2><p>Select the format, length and exact number of shorts</p></div></div>
+          <div class="settings-grid">
+            <div class="field"><label for="clip-seconds">Clip length</label><select id="clip-seconds"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">120 seconds</option></select></div>
+            <div class="field"><label for="max-clips">Maximum clips</label><select id="max-clips"><option value="1">1 clip</option><option value="2">2 clips</option><option value="3">3 clips</option><option value="5" selected>5 clips</option><option value="10">10 clips</option><option value="25">25 clips</option><option value="50">50 clips</option><option value="100">100 clips</option><option value="custom">Custom amount…</option></select><input type="number" id="custom-max-clips" class="custom-count" min="1" max="100" value="5" aria-label="Custom number of clips" hidden></div>
+            <div class="field"><label for="aspect-ratio">Video format</label><select id="aspect-ratio"><option value="9:16">9:16 · Vertical shorts</option><option value="16:9">16:9 · Widescreen</option><option value="1:1">1:1 · Square</option></select></div>
+          </div>
+          <div class="settings-heading ai-heading"><span class="step">03</span><div><h2>AI editor</h2><p>Find standout moments and give your clips a distinct look</p></div></div>
           <div class="settings-grid ai-grid">
             <div class="field"><label for="selection-mode">Highlight selection</label><select id="selection-mode"><option value="ai" selected>AI · Understand the story</option><option value="energy">Audio-energy · Fast</option></select></div>
             <div class="field"><label for="caption-style">Automatic captions</label><select id="caption-style"><option value="bold" selected>Bold yellow</option><option value="classic">Classic white</option><option value="neon">Neon pink</option><option value="none">No captions</option></select></div>
             <div class="field"><label for="effect">Video effect</label><select id="effect"><option value="none">Natural</option><option value="pop" selected>Vibrant pop</option><option value="cinema">Cinematic</option><option value="noir">Black &amp; white</option></select></div>
-            <div class="field"><label for="framing">Vertical framing</label><select id="framing"><option value="crop" selected>Center crop to fill</option><option value="pad">Keep full frame</option></select></div>
+            <div class="field"><label for="framing">Vertical framing</label><select id="framing"><option value="crop" selected>Crop to fill</option><option value="pad">Keep full frame</option></select></div>
           </div>
-          <div class="ai-notice" id="ai-notice">AI mode uses local Whisper for captions and Ollama to understand the best moments. Start the AI Docker profile and download an Ollama model before generating.</div>
-          <label class="rights"><input type="checkbox" id="rights" /><span>I own this video or have permission to download, edit, and create clips from it.</span></label>
-          <button class="create-button" id="create-button">✦ Generate clips <span>→</span></button>
-          <div class="creator-footnote">No automatic posting. Clips remain on your own machine.</div>
-          <div id="message" role="alert" class="message" hidden></div>
+          <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Commentator &amp; storytelling</h2><p>Create a short script based on what is actually said in the clip</p></div></div>
+          <div class="settings-grid">
+            <div class="field"><label for="narration">Narration mode</label><select id="narration"><option value="none">Original audio only</option><option value="script">Generate AI script · no voice</option><option value="narrated">AI script + commentator voice</option></select></div>
+            <div class="field"><label for="narration-style">Commentary style</label><select id="narration-style"><option value="energetic">Energetic / short-form</option><option value="documentary">Documentary / informative</option><option value="casual">Casual / conversational</option></select></div>
+            <div class="field"><label for="narration-language">Narration language</label><select id="narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
+          </div>
+          <p class="helper-note" id="narration-notice">Commentator audio uses ElevenLabs when connected. The original track stays low under the voice.</p>
+          <div class="ai-notice" id="ai-notice">AI selection and scripts use a local Ollama model. Voiceover is an optional external service.</div>
+          <label class="rights"><input type="checkbox" id="rights"><span>I own or have permission to download, edit and republish this video.</span></label>
+          <button type="button" class="create-button" id="create-button">✦ Generate clips <span>→</span></button>
+          <div class="creator-footnote">Nothing posts automatically. Review your finished clips in the Library.</div>
+          <div id="message" class="message" role="alert" hidden></div>
         </section>
-        <div class="process-guide"><div><span class="guide-icon">↗</span><strong>Import</strong><small>Link or file</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⌁</span><strong>Discover</strong><small>AI transcript + highlight scoring</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">▣</span><strong>Create</strong><small>MP4 video clips</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⇩</span><strong>Export</strong><small>Download in bulk</small></div></div>
-        <section class="library" id="library"><div class="library-title"><div><div class="eyebrow">YOUR OUTPUT</div><h2>Clip library &amp; publishing</h2><p>Preview, download, or approve posting a finished clip to connected platforms.</p></div><button id="refresh" class="refresh">↻ Refresh</button></div><div id="jobs" class="jobs"><div class="empty"><div class="empty-graphic">▤</div><strong>No clips yet</strong><span>Your generated clips will show up here.</span></div></div></section>
-        <footer>ClipForge 0.2.0 · Self-hosted clip production · AI semantic highlights, timed captions, effects and creator-approved publishing.</footer>
-      </div>
-    </main>
-  </div>
-  <script src="/assets/app.js" defer></script>
+        <div class="process-guide"><div><span class="guide-icon">↗</span><strong>Import</strong><small>Link or file</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⌁</span><strong>Discover</strong><small>Highlight scoring</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">♬</span><strong>Produce</strong><small>Captions + commentary</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⇩</span><strong>Review</strong><small>Library + publishing</small></div></div>
+      </section>
+
+      <section id="view-library" class="page-view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">YOUR CREATIONS</div><h1>Clip <span>Library.</span></h1><p class="lede">Preview finished shorts, read their narration scripts, and download the videos you want to keep.</p></div><a class="small-action primary-action" href="/studio">✦ New clips</a></div>
+        <div class="section-toolbar"><span id="library-summary">Loading clips…</span><button type="button" class="refresh" data-refresh>↻ Refresh</button></div>
+        <div id="jobs-library" class="jobs"></div>
+      </section>
+
+      <section id="view-publishing" class="page-view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION CENTER</div><h1>Publish with <span>control.</span></h1><p class="lede">Review each clip before sending it to YouTube, Instagram, Facebook or TikTok. Nothing posts without your approval.</p></div><a class="small-action" href="/settings">⚙ Connections &amp; setup</a></div>
+        <div id="platform-connections" class="connection-grid"></div>
+        <div class="section-toolbar"><span>Ready to review &amp; share</span><button class="refresh" type="button" data-refresh>↻ Refresh</button></div>
+        <div id="jobs-publishing" class="jobs"></div>
+      </section>
+
+      <section id="view-activity" class="page-view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">PROCESSING HISTORY</div><h1>Queue &amp; <span>Activity.</span></h1><p class="lede">Track transcription, highlight scoring, rendering and recovery, with detailed failure reasons and one-click resume.</p></div><button class="small-action" data-refresh type="button">↻ Refresh queue</button></div>
+        <div class="stats-row" id="activity-stats"></div>
+        <div id="jobs-activity" class="jobs"></div>
+      </section>
+
+      <section id="view-settings" class="page-view" hidden>
+        <div class="eyebrow">PERSONALIZE YOUR WORKFLOW</div><h1>Studio <span>settings.</span></h1>
+        <p class="lede">Save your preferred output settings. Your media stays on the server; service keys remain in its private environment.</p>
+        <div class="settings-page-grid">
+          <section class="settings-card"><h2>Default clip settings</h2><p>New Studio jobs start with these preferences. Individual jobs can still override them.</p>
+            <form id="settings-form" class="settings-form">
+              <div class="field"><label for="settings-clip-seconds">Length (seconds)</label><select id="settings-clip-seconds"><option>15</option><option>30</option><option>45</option><option>60</option><option>90</option><option>120</option></select></div>
+              <div class="field"><label for="settings-max-clips">Maximum clips (1–100)</label><input type="number" min="1" max="100" id="settings-max-clips" required></div>
+              <div class="field"><label for="settings-aspect-ratio">Aspect ratio</label><select id="settings-aspect-ratio"><option>9:16</option><option>16:9</option><option>1:1</option></select></div>
+              <div class="field"><label for="settings-selection-mode">Selection mode</label><select id="settings-selection-mode"><option value="ai">AI semantic</option><option value="energy">Audio-energy</option></select></div>
+              <div class="field"><label for="settings-caption-style">Captions</label><select id="settings-caption-style"><option value="bold">Bold</option><option value="classic">Classic</option><option value="neon">Neon</option><option value="none">None</option></select></div>
+              <div class="field"><label for="settings-effect">Effect</label><select id="settings-effect"><option value="pop">Pop</option><option value="cinema">Cinema</option><option value="noir">Noir</option><option value="none">Natural</option></select></div>
+              <div class="field"><label for="settings-framing">Framing</label><select id="settings-framing"><option value="crop">Crop to fill</option><option value="pad">Keep full frame</option></select></div>
+              <div class="field"><label for="settings-narration">Narration</label><select id="settings-narration"><option value="none">Off</option><option value="script">AI script</option><option value="narrated">Voiceover</option></select></div>
+              <div class="field"><label for="settings-narration-style">Commentary style</label><select id="settings-narration-style"><option value="energetic">Energetic</option><option value="documentary">Documentary</option><option value="casual">Casual</option></select></div>
+              <div class="field"><label for="settings-narration-language">Language</label><select id="settings-narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
+              <div class="settings-actions"><button class="create-button" type="submit">Save preferences</button><span id="settings-feedback" aria-live="polite"></span></div>
+            </form>
+          </section>
+          <div class="settings-side">
+            <section class="settings-card"><h2>AI processing</h2><p id="settings-ai-status">Checking Ollama configuration…</p><p class="helper-note">AI runs inside your private Docker network. For slower servers, reduce clips per job or choose Audio-energy mode.</p></section>
+            <section class="settings-card"><h2>Commentator voice</h2><p id="settings-voice-status">Checking voice connection…</p><p class="helper-note">ElevenLabs voiceover requires <code>CLIPFORGE_ELEVENLABS_API_KEY</code> and <code>CLIPFORGE_ELEVENLABS_VOICE_ID</code> in your server's <code>.env</code>. Only generated script text is sent to the voice provider. API usage may incur charges.</p></section>
+            <section class="settings-card"><h2>Publishing connections</h2><div id="settings-platforms"></div><p class="helper-note">Configure platform credentials in your server's private <code>.env</code>. Publishing is always manually approved.</p></section>
+            <section class="settings-card"><h2>Security &amp; storage</h2><p>ClipForge is a private, single-user preview with no built-in login. Keep Tailscale access limited to trusted devices. Docker volumes preserve existing clips and resumable checkpoints.</p></section>
+          </div>
+        </div>
+      </section>
+
+      <footer>ClipForge · Private short-form studio · AI editing + narrator + creator-approved publishing</footer>
+    </div>
+  </main>
+</div>
+<script src="/assets/app.js" defer></script>
 </body>
 </html>

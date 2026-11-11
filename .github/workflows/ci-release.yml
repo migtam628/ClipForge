@@ -13,6 +13,7 @@ jobs:
   test:
     name: Tests · Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -31,10 +32,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install package with test tools
         run: python -m pip install -e '.[dev]'
+      - name: Validate browser JavaScript
+        run: node --check clipforge/static/app.js
       - name: Lint
         run: ruff check .
       - name: Unit and end-to-end media tests
-        run: pytest -q
+        run: pytest -vv --maxfail=1 --timeout=90
 
   docker-smoke:
     name: Docker image and API smoke test
@@ -101,7 +104,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="v0.2.0-preview.${RUN_NUMBER}"
+          tag="v0.3.0-preview.${RUN_NUMBER}"
           gh release create "$tag" dist/* \
             --target "$SOURCE_SHA" \
             --title "ClipForge $tag" \

@@ -54,3 +54,27 @@ def write_captions(transcript: list[dict], start: float, duration: float,
         lines.append(f"Dialogue: 0,{_ass_time(begin)},{_ass_time(end)},Main,,0,0,0,,{label}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
+
+
+def write_narration_captions(
+    script: str, narration_seconds: float, clip_seconds: float,
+    style: str, path: Path,
+) -> bool:
+    """Approximate word timing for TTS narration (not a claim of exact alignment).
+
+    Future versions can use provider word timestamps for precise karaoke captions.
+    """
+    words = script.split()
+    if not words or narration_seconds <= 0:
+        return False
+    span = min(float(clip_seconds), narration_seconds)
+    step = span / len(words)
+    synthetic = [{
+        "words": [
+            {"start": round(i * step, 3),
+             "end": round(min(span, (i + 1) * step), 3),
+             "text": word}
+            for i, word in enumerate(words)
+        ],
+    }]
+    return write_captions(synthetic, 0, clip_seconds, style, path)

@@ -14,7 +14,7 @@ def test_health_and_dashboard():
     assert client.get("/api/health").json()["status"] == "ok"
     page = client.get("/")
     assert page.status_code == 200
-    assert "One video." in page.text
+    assert "From long-form to" in page.text
     assert client.get("/assets/app.js").status_code == 200
 
 

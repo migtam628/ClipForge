@@ -2,15 +2,52 @@ const $ = (id) => document.getElementById(id);
 let activeTab = 'url';
 let polling = false;
 let platforms = [];
+const validPages = ['studio', 'library', 'publishing', 'activity', 'settings'];
+const currentPage = validPages.includes(location.pathname.slice(1))
+  ? location.pathname.slice(1) : 'studio';
+const labels = {studio: 'Studio', library: 'Clip Library',
+  publishing: 'Publishing', activity: 'Activity', settings: 'Settings'};
+$('page-crumb').textContent = labels[currentPage];
+document.title = 'ClipForge · ' + labels[currentPage];
+for (const page of validPages) {
+  $('view-' + page).hidden = page !== currentPage;
+}
+for (const item of document.querySelectorAll('.nav-link[data-page]')) {
+  const active = item.dataset.page === currentPage;
+  item.classList.toggle('selected', active);
+  if (active) item.setAttribute('aria-current', 'page');
+}
 
 $('url-tab').addEventListener('click', () => toggleTab('url'));
 $('upload-tab').addEventListener('click', () => toggleTab('upload'));
 $('create-button').addEventListener('click', createJob);
-$('refresh').addEventListener('click', refresh);
+for (const button of document.querySelectorAll('[data-refresh]')) {
+  button.addEventListener('click', refresh);
+}
 $('file').addEventListener('change', () => {
   const file = $('file').files[0];
   if (file) document.querySelector('.drop-zone strong').textContent = file.name;
 });
+$('max-clips').addEventListener('change', updateCustomCount);
+$('narration').addEventListener('change', updateNarrationNotice);
+$('settings-form').addEventListener('submit', savePreferences);
+
+function updateCustomCount() {
+  $('custom-max-clips').hidden = $('max-clips').value !== 'custom';
+}
+
+function updateNarrationNotice() {
+  const mode = $('narration').value;
+  const note = $('narration-notice');
+  if (mode === 'narrated') {
+    note.textContent = 'Voiceover uses ElevenLabs and may incur usage charges. Original audio will be quieter under the commentator. Configure a voice in Settings.';
+  } else if (mode === 'script') {
+    note.textContent = 'Generates a grounded AI script you can read or copy. It does not create voice audio.';
+  } else {
+    note.textContent = 'Use original video audio. No AI script or external text-to-speech charge.';
+  }
+}
+
 
 function toggleTab(tab) {
   activeTab = tab;
@@ -22,23 +59,43 @@ function toggleTab(tab) {
 }
 
 function notify(text) {
-  $('message').textContent = text;
-  $('message').hidden = !text;
+  const notice = currentPage === 'studio' ? $('message') : toast();
+  notice.textContent = text;
+  notice.hidden = !text;
 }
+
+function toast() {
+  let node = $('global-toast');
+  if (!node) {
+    node = el('div', 'global-toast');
+    node.id = 'global-toast';
+    node.setAttribute('role', 'status');
+    document.body.append(node);
+  }
+  return node;
+}
+
 
 async function createJob() {
   notify('');
   if (!$('rights').checked) return notify('Please confirm your rights to clip this content.');
   const options = {
     clip_seconds: Number($('clip-seconds').value),
-    max_clips: Number($('max-clips').value),
+    max_clips: Number($('max-clips').value === 'custom' ? $('custom-max-clips').value : $('max-clips').value),
     aspect_ratio: $('aspect-ratio').value,
     selection_mode: $('selection-mode').value,
     caption_style: $('caption-style').value,
     effect: $('effect').value,
     framing: $('framing').value,
+    narration: $('narration').value,
+    narration_style: $('narration-style').value,
+    narration_language: $('narration-language').value,
     rights_confirmed: true
   };
+  if (!Number.isInteger(options.max_clips) ||
+      options.max_clips < 1 || options.max_clips > 100) {
+    return notify('Choose between 1 and 100 clips.');
+  }
   let request;
   if (activeTab === 'url') {
     const url = $('url').value.trim();
@@ -63,8 +120,7 @@ async function createJob() {
     $('url').value = '';
     $('file').value = '';
     $('rights').checked = false;
-    await refresh();
-    $('library').scrollIntoView({behavior: 'smooth'});
+    location.assign('/activity');
   } catch (err) {
     notify(err.message);
   } finally {
@@ -79,7 +135,7 @@ function el(tag, cls, content) {
   return node;
 }
 
-function card(job) {
+function card(job, mode = currentPage) {
   const wrapper = el('article', 'job');
   const head = el('div', 'job-head');
   const meta = el('div');
@@ -94,7 +150,7 @@ function card(job) {
     bar.append(fill);
     wrapper.append(bar);
   }
-  if (job.clips.length) {
+  if (job.clips.length && mode !== 'activity') {
     const actions = el('div', 'job-actions');
     actions.append(el('span', '', `${job.clips.length} clips generated`));
     if (job.status === 'completed') {
@@ -120,7 +176,22 @@ function card(job) {
       if (clip.title) description.append(el('p', 'clip-ai-title', clip.title));
       if (clip.reason) description.append(el('p', 'clip-ai-reason', clip.reason));
       if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
-      if (job.status === 'completed') {
+      if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
+      if (clip.script) {
+        const scriptDetails = el('details', 'script-details');
+        const toggle = el('summary', '', 'Read AI commentary script');
+        const scriptText = el('p', 'script-copy', clip.script);
+        const copyButton = el('button', 'small-action', 'Copy script');
+        copyButton.type = 'button';
+        copyButton.addEventListener('click', () => {
+          navigator.clipboard.writeText(clip.script)
+            .then(() => notify('Commentary script copied.'))
+            .catch(() => notify('Could not copy script.'));
+        });
+        scriptDetails.append(toggle, scriptText, copyButton);
+        description.append(scriptDetails);
+      }
+      if (job.status === 'completed' && mode === 'publishing') {
         const available = platforms.filter((p) => p.configured);
         if (available.length) {
           const publishButton = el('button', 'publish-button', '↗ Send to social platform');
@@ -184,8 +255,12 @@ function card(job) {
           description.append(publishButton, panel);
         } else {
           description.append(el('small', 'publish-guidance',
-            'Social publishing is available after server credentials are configured. Download MP4 meanwhile.'));
+            'Connect a platform in your server configuration to enable approved uploads.'));
         }
+      } else if (job.status === 'completed' && mode === 'library') {
+        const shareLink = el('a', 'library-publish-link', '↗ Review in Publishing');
+        shareLink.href = '/publishing';
+        description.append(shareLink);
       }
       const posts = (job.publications || []).filter((p) => p.filename === clip.filename);
       for (const post of posts) {
@@ -235,8 +310,10 @@ function card(job) {
 }
 
 async function refresh() {
-  if (polling) return;
+  if (!['library', 'publishing', 'activity'].includes(currentPage) || polling) return;
   polling = true;
+  const target = $(currentPage === 'library' ? 'jobs-library' :
+                   currentPage === 'publishing' ? 'jobs-publishing' : 'jobs-activity');
   try {
     const [response, platformsResponse] = await Promise.all([
       fetch('/api/jobs', {cache: 'no-store'}),
@@ -245,12 +322,44 @@ async function refresh() {
     if (platformsResponse.ok) platforms = await platformsResponse.json();
     if (!response.ok) throw new Error('Cannot reach ClipForge server');
     const jobs = await response.json();
-    if (!jobs.length) {
-      $('jobs').replaceChildren(el('div', 'empty'));
-      $('jobs').firstChild.append(el('div', 'empty-graphic', '▤'), el('strong', '', 'No clips yet'), el('span', '', 'Your generated clips will show up here.'));
+    const shown = currentPage === 'library'
+      ? jobs.filter((job) => job.clips.length > 0 || job.status === 'completed')
+      : currentPage === 'publishing'
+        ? jobs.filter((job) => job.status === 'completed')
+        : jobs;
+    target.replaceChildren();
+    if (!shown.length) {
+      const empty = el('div', 'empty');
+      empty.append(el('div', 'empty-graphic', '▤'),
+        el('strong', '', currentPage === 'activity' ? 'No processing jobs yet' :
+                          currentPage === 'publishing' ? 'No clips ready to publish' :
+                          'Your clip library is empty'),
+        el('span', '', currentPage === 'activity' ? 'Start a video in Studio to see it here.' :
+          'Create clips in Studio to populate this page.'));
+      target.append(empty);
     } else {
-      $('jobs').replaceChildren(...jobs.map(card));
+      target.append(...shown.map((job) => card(job, currentPage)));
     }
+    if (currentPage === 'library') {
+      const count = shown.reduce((sum, job) => sum + job.clips.length, 0);
+      $('library-summary').textContent = count + ' clips across ' + shown.length + ' jobs';
+    }
+    if (currentPage === 'activity') {
+      const working = jobs.filter((job) => !['failed', 'completed'].includes(job.status));
+      const completed = jobs.filter((job) => job.status === 'completed');
+      const failed = jobs.filter((job) => job.status === 'failed');
+      const parent = $('activity-stats');
+      parent.replaceChildren();
+      for (const [value, label] of [
+        [working.length, 'In progress'], [completed.length, 'Completed'],
+        [failed.length, 'Needs attention'], [jobs.length, 'Total jobs']
+      ]) {
+        const item = el('div', 'stat-item');
+        item.append(el('strong', '', String(value)), el('span', '', label));
+        parent.append(item);
+      }
+    }
+    if (currentPage === 'publishing') renderPlatforms();
   } catch (err) {
     notify(err.message);
   } finally {
@@ -258,23 +367,115 @@ async function refresh() {
   }
 }
 
+function renderPlatforms() {
+  const group = $('platform-connections');
+  if (!group) return;
+  group.replaceChildren();
+  for (const p of platforms) {
+    const item = el('div', 'connection-card');
+    item.append(el('strong', '', p.name),
+                el('span', p.configured ? 'connected' : 'not-connected',
+                   p.configured ? 'Configured' : 'Not connected'));
+    group.append(item);
+  }
+}
+
+const settingsIds = {
+  clip_seconds: 'clip-seconds',
+  max_clips: 'max-clips',
+  aspect_ratio: 'aspect-ratio',
+  selection_mode: 'selection-mode',
+  caption_style: 'caption-style',
+  effect: 'effect',
+  framing: 'framing',
+  narration: 'narration',
+  narration_style: 'narration-style',
+  narration_language: 'narration-language',
+};
+
+function applyDefaults(defaults, prefix) {
+  for (const [key, field] of Object.entries(settingsIds)) {
+    const item = $(prefix + field);
+    if (!item || defaults[key] === undefined) continue;
+    if (!prefix && key === 'max_clips') {
+      const amount = String(defaults[key]);
+      if (![...item.options].some((opt) => opt.value === amount)) {
+        item.value = 'custom';
+        $('custom-max-clips').value = amount;
+      } else item.value = amount;
+      updateCustomCount();
+    } else item.value = String(defaults[key]);
+  }
+}
+
+async function loadSettings() {
+  try {
+    const response = await fetch('/api/settings', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Could not load settings');
+    const settings = await response.json();
+    if (currentPage === 'studio') {
+      applyDefaults(settings.defaults, '');
+      $('ai-notice').textContent = settings.ai.whisper_installed &&
+          settings.ai.ollama_configured
+        ? 'AI: Whisper + ' + settings.ai.model + '. Local scoring can take longer on CPU-only servers.'
+        : 'AI is not fully configured. You can still use Audio-energy selection.';
+      updateNarrationNotice();
+      if (!settings.narration.elevenlabs_configured) {
+        $('narration-notice').textContent +=
+          ' ElevenLabs is not connected; choose script-only or configure it in Settings.';
+      }
+    }
+    if (currentPage === 'settings') {
+      applyDefaults(settings.defaults, 'settings-');
+      $('settings-ai-status').textContent =
+        'Whisper: ' + (settings.ai.whisper_installed ? 'installed' : 'unavailable') +
+        ' · Ollama: ' + (settings.ai.ollama_configured ? 'configured' : 'not configured') +
+        ' · Model: ' + settings.ai.model;
+      $('settings-voice-status').textContent =
+        settings.narration.elevenlabs_configured
+          ? 'ElevenLabs voiceover is configured on this server.'
+          : 'ElevenLabs is not configured. AI script-only mode is available without it.';
+      const platformsResponse = await fetch('/api/publishing/platforms');
+      if (platformsResponse.ok) {
+        const list = await platformsResponse.json();
+        $('settings-platforms').replaceChildren(...list.map((p) =>
+          el('p', 'connection-line', p.name + ': ' +
+             (p.configured ? 'configured' : 'not connected'))
+        ));
+      }
+    }
+  } catch (err) {
+    notify(err.message);
+  }
+}
+
+async function savePreferences(event) {
+  event.preventDefault();
+  const data = {};
+  for (const [key, field] of Object.entries(settingsIds)) {
+    const raw = $('settings-' + field).value;
+    data[key] = ['clip_seconds', 'max_clips'].includes(key) ? Number(raw) : raw;
+  }
+  if (!Number.isInteger(data.max_clips) || data.max_clips < 1 ||
+      data.max_clips > 100) return notify('Maximum clips must be between 1 and 100.');
+  try {
+    const response = await fetch('/api/settings', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Could not save settings');
+    $('settings-feedback').textContent = 'Preferences saved.';
+  } catch (err) { notify(err.message); }
+}
+
+loadSettings();
 refresh();
 setInterval(() => {
-  // Do not recreate video players while a clip is playing.
-  if (![...document.querySelectorAll('video')].some((v) => !v.paused)
-    && ![...document.querySelectorAll('.publish-panel')].some((panel) => !panel.hidden)) refresh();
-}, 4000);
-
-(async () => {
-  try {
-    const res = await fetch('/api/ai/status');
-    if (!res.ok) return;
-    const status = await res.json();
-    const notice = $('ai-notice');
-    if (!status.whisper_installed || !status.ollama_configured) {
-      notice.textContent = 'AI is not configured yet. Start Docker with --profile ai, pull the model, and install Whisper. Audio-energy mode remains available.';
-    } else {
-      notice.textContent = `AI engine: Whisper + ${status.model}. First transcription downloads speech models; long videos use substantial CPU time.`;
-    }
-  } catch (_) { /* Optional capability banner */ }
-})();
+  if (!['library', 'publishing', 'activity'].includes(currentPage)) return;
+  // Do not recreate a video player while someone is watching it or editing a post.
+  if (![...document.querySelectorAll('video')].some((v) => !v.paused) &&
+      ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden)) {
+    refresh();
+  }
+}, 5000);

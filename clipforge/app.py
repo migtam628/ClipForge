@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
-from clipforge.captions import write_captions
+from clipforge.captions import write_captions, write_narration_captions
 from clipforge.engine import (
     audio_energy,
     download_video,
@@ -32,6 +32,13 @@ from clipforge.engine import (
     render_thumbnail,
     select_highlights,
     validate_url,
+)
+from clipforge.narration import (
+    audio_duration,
+    build_script,
+    narration_status,
+    require_voice_config,
+    synthesize,
 )
 from clipforge.publishing import platform_status, publish
 from clipforge.recovery import load_json, recover_source, save_json
@@ -69,6 +76,9 @@ class Options(BaseModel):
     caption_style: Literal["none", "classic", "bold", "neon"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop"] = "pad"
+    narration: Literal["none", "script", "narrated"] = "none"
+    narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
+    narration_language: Literal["en", "es"] = "en"
 
 
 class UrlRequest(Options):
@@ -150,6 +160,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
         if job["status"] == "completed":
             return
         opts = Options(**job["options"])
+        if opts.narration == "narrated":
+            require_voice_config()
         LOGGER.info("ClipForge job %s started or resumed", folder.name)
         source_path = source_path or recover_source(folder, job)
         if source_path is None and job["source"] == "url":
@@ -181,7 +193,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 save_json(folder / "audio-energy.json", energy)
 
         transcript = []
-        if opts.selection_mode == "ai" or opts.caption_style != "none":
+        if (opts.selection_mode == "ai" or opts.caption_style != "none"
+                or opts.narration != "none"):
             if not info["has_audio"]:
                 raise RuntimeError("Speech transcription needs a video with audio")
             _stage(folder, "transcribing", 12)
@@ -237,6 +250,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 and cached_clip.get("duration") == candidate["duration"]
                 and destination.is_file()
                 and destination.stat().st_size > 0
+                and cached_clip.get("narration", "none") == opts.narration
             )
             if can_skip:
                 try:
@@ -252,13 +266,34 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                         cached_clip["thumbnail"] = None
                 clips.append(cached_clip)
             else:
+                script = None
+                voiceover = None
+                if opts.narration != "none":
+                    narration_dir = folder / "narration"
+                    narration_dir.mkdir(exist_ok=True)
+                    script = build_script(
+                        transcript, candidate["start"], candidate["duration"],
+                        opts.narration_style, opts.narration_language,
+                        narration_dir / f"clip-{index:03d}.json",
+                    )
+                    if opts.narration == "narrated":
+                        voiceover = synthesize(
+                            script, narration_dir / f"clip-{index:03d}.mp3",
+                        )
                 subtitles = None
                 if opts.caption_style != "none":
                     ass = output / f"clip-{index:03d}.ass"
-                    if write_captions(
-                        transcript, candidate["start"], candidate["duration"],
-                        opts.caption_style, ass,
-                    ):
+                    if voiceover is not None:
+                        added = write_narration_captions(
+                            script, audio_duration(voiceover),
+                            candidate["duration"], opts.caption_style, ass,
+                        )
+                    else:
+                        added = write_captions(
+                            transcript, candidate["start"], candidate["duration"],
+                            opts.caption_style, ass,
+                        )
+                    if added:
                         subtitles = ass
                 # A crash during FFmpeg must not leave a supposedly valid clip.
                 partial = output / f".clip-{index:03d}.partial.mp4"
@@ -266,7 +301,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 render_clip(
                     source_path, partial, candidate["start"], candidate["duration"],
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
-                    framing=opts.framing,
+                    framing=opts.framing, voiceover=voiceover,
+                    has_source_audio=info["has_audio"],
                 )
                 os.replace(partial, destination)
                 try:
@@ -276,7 +312,9 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 clips.append({
                     "filename": filename, "thumbnail": thumbnail, "number": index,
                     "captions_added": subtitles is not None, "effect": opts.effect,
-                    "framing": opts.framing, **candidate,
+                    "framing": opts.framing, "narration": opts.narration,
+                    "script": script, "voiceover_added": voiceover is not None,
+                    **candidate,
                 })
             _patch(folder, clips=clips, progress=max(
                 _read(folder).get("progress", 0),
@@ -309,7 +347,13 @@ def recover_interrupted_jobs() -> None:
 
 
 @app.get("/")
+@app.get("/studio")
+@app.get("/library")
+@app.get("/publishing")
+@app.get("/activity")
+@app.get("/settings")
 def index():
+    """Distinct navigable pages share one UI shell and static assets."""
     return FileResponse(STATIC / "index.html")
 
 
@@ -326,6 +370,30 @@ def get_ai_status():
 @app.get("/api/publishing/platforms")
 def get_platforms():
     return platform_status()
+
+
+@app.get("/api/settings")
+def get_settings():
+    saved = load_json(DATA_DIR / "settings.json")
+    try:
+        defaults = Options(**saved) if isinstance(saved, dict) else Options(
+            selection_mode="ai", caption_style="bold", effect="pop",
+            framing="crop", max_clips=5,
+        )
+    except ValueError:
+        defaults = Options()
+    return {
+        "defaults": defaults.model_dump(),
+        "ai": ai_capabilities(),
+        "narration": narration_status(),
+    }
+
+
+@app.put("/api/settings")
+def save_settings(defaults: Options):
+    """Persist nonsecret Studio defaults. Secrets stay in server environment."""
+    save_json(DATA_DIR / "settings.json", defaults.model_dump())
+    return {"defaults": defaults.model_dump()}
 
 
 @app.post("/api/jobs", status_code=202)
@@ -351,6 +419,9 @@ async def submit_upload(
     caption_style: str = Form("none"),
     effect: str = Form("none"),
     framing: str = Form("pad"),
+    narration: str = Form("none"),
+    narration_style: str = Form("energetic"),
+    narration_language: str = Form("en"),
     rights_confirmed: bool = Form(False),
 ):
     if not rights_confirmed:
@@ -360,6 +431,8 @@ async def submit_upload(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
             effect=effect, framing=framing,
+            narration=narration, narration_style=narration_style,
+            narration_language=narration_language,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

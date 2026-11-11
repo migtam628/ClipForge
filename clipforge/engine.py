@@ -6,6 +6,7 @@ import array
 import ipaddress
 import json
 import math
+import os
 import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -157,6 +158,7 @@ def select_highlights(
 def render_clip(
     source: Path, dest: Path, start: float, length: float, ratio: str,
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
+    voiceover: Path | None = None, has_source_audio: bool = True,
 ) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
@@ -186,19 +188,40 @@ def render_clip(
         # Caption paths are server-owned UUID locations, never user-provided paths.
         safe_path = str(captions).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_path
-    subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
-            str(start), "-i", str(source), "-t", str(length), "-map", "0:v:0", "-map",
-            "0:a:0?", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf",
-            "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", str(dest),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=True,
-    )
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
+        str(start), "-i", str(source),
+    ]
+    if voiceover is not None:
+        args.extend(["-i", str(voiceover)])
+    args += ["-t", str(length), "-map", "0:v:0"]
+    if voiceover is not None:
+        # Keep original speech under the commentator without padding infinite audio.
+        # FFmpeg -t truncates the final output to the clip length.
+        if has_source_audio:
+            audio_filter = (
+                "[0:a:0]volume=0.18,asetpts=PTS-STARTPTS[bed];"
+                "[1:a:0]asetpts=PTS-STARTPTS[voice];"
+                "[bed][voice]amix=inputs=2:duration=longest:"
+                "dropout_transition=0:normalize=0[aout]"
+            )
+        else:
+            audio_filter = "[1:a:0]asetpts=PTS-STARTPTS[aout]"
+        args += ["-filter_complex", audio_filter, "-map", "[aout]"]
+    else:
+        args += ["-map", "0:a:0?"]
+    try:
+        threads = max(1, min(8, int(os.environ.get("CLIPFORGE_FFMPEG_THREADS", "2"))))
+    except ValueError:
+        threads = 2
+    args += [
+        "-vf", vf, "-c:v", "libx264", "-threads", str(threads),
+        "-preset", "veryfast", "-crf",
+        "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", str(dest),
+    ]
+    subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+
 
 
 def render_thumbnail(clip: Path, dest: Path) -> None:
