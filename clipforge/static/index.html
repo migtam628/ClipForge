@@ -112,6 +112,12 @@
             </form>
           </section>
           <div class="settings-side">
+            <section class="settings-card">
+              <h2>YouTube URL imports</h2>
+              <p id="settings-youtube-status">Checking authorized YouTube import configuration…</p>
+              <p class="helper-note">Optional: securely mount a YouTube-only Netscape cookies.txt file at <code>./private-auth/youtube.txt</code> on your Docker host. The file remains outside Git and is not uploaded through the browser. Use only with videos you have permission to download and edit.</p>
+              <p class="helper-note">If account verification keeps failing, import the original MP4 directly instead. Session cookies do not guarantee access.</p>
+            </section>
             <section class="settings-card"><h2>AI processing</h2><p id="settings-ai-status">Checking Ollama configuration…</p><p class="helper-note">AI runs inside your private Docker network. For slower servers, reduce clips per job or choose Audio-energy mode.</p></section>
             <section class="settings-card"><h2>Commentator voice</h2><p id="settings-voice-status">Checking voice connection…</p><p class="helper-note">ElevenLabs voiceover requires <code>CLIPFORGE_ELEVENLABS_API_KEY</code> and <code>CLIPFORGE_ELEVENLABS_VOICE_ID</code> in your server's <code>.env</code>. Only generated script text is sent to the voice provider. API usage may incur charges.</p></section>
             <section class="settings-card"><h2>Publishing connections</h2><div id="settings-platforms"></div><p class="helper-note">Configure platform credentials in your server's private <code>.env</code>. Publishing is always manually approved.</p></section>

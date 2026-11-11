@@ -33,6 +33,7 @@ from clipforge.engine import (
     select_highlights,
     validate_url,
 )
+from clipforge.import_auth import youtube_cookie_status
 from clipforge.narration import (
     audio_duration,
     build_script,
@@ -386,6 +387,7 @@ def get_settings():
         "defaults": defaults.model_dump(),
         "ai": ai_capabilities(),
         "narration": narration_status(),
+        "youtube_import": youtube_cookie_status(),
     }
 
 
