@@ -196,21 +196,17 @@ def render_clip(
         args.extend(["-i", str(voiceover)])
     args += ["-t", str(length), "-map", "0:v:0"]
     if voiceover is not None:
-        # Keep original audio audible but quieter than the commentary track.
-        # Both audio paths are padded/trimmed to the exact output duration.
+        # Keep original speech under the commentator without padding infinite audio.
+        # FFmpeg -t truncates the final output to the clip length.
         if has_source_audio:
             audio_filter = (
-                f"[0:a:0]volume=0.18,apad,atrim=duration={length},"
-                "asetpts=PTS-STARTPTS[bed];"
-                f"[1:a:0]apad,atrim=duration={length},asetpts=PTS-STARTPTS[voice];"
+                "[0:a:0]volume=0.18,asetpts=PTS-STARTPTS[bed];"
+                "[1:a:0]asetpts=PTS-STARTPTS[voice];"
                 "[bed][voice]amix=inputs=2:duration=longest:"
                 "dropout_transition=0:normalize=0[aout]"
             )
         else:
-            audio_filter = (
-                f"[1:a:0]apad,atrim=duration={length},"
-                "asetpts=PTS-STARTPTS[aout]"
-            )
+            audio_filter = "[1:a:0]asetpts=PTS-STARTPTS[aout]"
         args += ["-filter_complex", audio_filter, "-map", "[aout]"]
     else:
         args += ["-map", "0:a:0?"]
