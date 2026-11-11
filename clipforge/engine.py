@@ -247,7 +247,10 @@ def download_video(url: str, output_dir: Path) -> Path:
     validate_url(url)
     opts = {
         "outtmpl": str(output_dir / "source.%(ext)s"),
-        "format": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        # Prefer <=1080p video/audio, but accept an available resolution if the
+        # source has no <=1080p formats. Unknown heights must not be discarded.
+        "format": "bv*[height<=?1080]+ba/b[height<=?1080]/bv*+ba/b",
+        "format_sort": ["res:1080"],
         "merge_output_format": "mp4",
         "noplaylist": True,
         "max_filesize": 2 * 1024 * 1024 * 1024,
@@ -270,6 +273,15 @@ def download_video(url: str, output_dir: Path) -> Path:
                 downloader.download([url])
         except yt_dlp.utils.DownloadError as exc:
             message = str(exc).lower()
+            if "requested format is not available" in message or "only images are available" in message:
+                raise RuntimeError(
+                    "YouTube did not provide a playable video format. ClipForge "
+                    "tried its <=1080p preference and unrestricted video fallbacks. "
+                    "Confirm this Docker image has Deno and yt-dlp-ejs installed, "
+                    "then inspect available formats with yt-dlp -F (see the README). "
+                    "If the video still has no usable streams, import an original MP4 "
+                    "you are authorized to use, or retry later via Activity."
+                ) from exc
             if "sign in to confirm" in message or "not a bot" in message:
                 raise RuntimeError(
                     "YouTube requested account verification. For a video you are "

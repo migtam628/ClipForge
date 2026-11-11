@@ -50,6 +50,10 @@ jobs:
       - name: Verify PyAV compatible with released faster-whisper
         run: |
           docker run --rm --entrypoint python clipforge:ci -c 'import av; print("PyAV", av.__version__); assert int(av.__version__.split(".")[0]) < 19'
+      - name: Verify yt-dlp YouTube JS challenge support
+        run: |
+          docker run --rm --entrypoint deno clipforge:ci --version
+          docker run --rm --entrypoint python clipforge:ci -c 'import importlib.metadata as m; import shutil; assert shutil.which("deno"); print("yt-dlp:", m.version("yt-dlp")); print("yt-dlp-ejs:", m.version("yt-dlp-ejs"))'
       - name: Launch container
         run: docker run -d --name clipforge-smoke -p 127.0.0.1:8765:8765 clipforge:ci
       - name: Check running API
