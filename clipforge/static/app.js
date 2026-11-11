@@ -83,7 +83,7 @@ function card(job) {
   const wrapper = el('article', 'job');
   const head = el('div', 'job-head');
   const meta = el('div');
-  meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}`));
+  meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
   head.append(meta, el('span', `job-status ${job.status === 'failed' ? 'failed' : ''}`, job.status));
   wrapper.append(head);
   if (job.status === 'failed') wrapper.append(el('p', 'error', job.error || 'This job failed.'));
@@ -207,6 +207,21 @@ function card(job) {
   }
   if (job.status === 'completed' || job.status === 'failed') {
     const actions = el('div', 'job-actions');
+    if (job.status === 'failed') {
+      const resume = el('button', 'resume-job', '↻ Resume job');
+      resume.title = 'Reuse saved source, transcript, scores and completed clips';
+      resume.addEventListener('click', async () => {
+        resume.disabled = true;
+        try {
+          const response = await fetch('/api/jobs/' + job.id + '/resume', {method: 'POST'});
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || 'Could not resume job');
+          notify('Job queued for recovery. Completed stages will be reused.');
+          await refresh();
+        } catch (err) { notify(err.message); resume.disabled = false; }
+      });
+      actions.append(resume);
+    }
     const remove = el('button', '', 'Delete job');
     remove.addEventListener('click', async () => {
       if (!confirm('Delete this job and all generated files?')) return;
