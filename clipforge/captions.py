@@ -78,3 +78,48 @@ def write_narration_captions(
         ],
     }]
     return write_captions(synthetic, 0, clip_seconds, style, path)
+
+
+def write_hook(title: str, duration: float, path: Path) -> bool:
+    """Display a brief, readable opening headline within social safe margins.
+
+    Title is data, not ASS markup; remove formatting metacharacters and
+    enforce bounded length before embedding in a subtitle file.
+    """
+    title = " ".join(_safe(title).split())[:80].strip()
+    if not title or duration < 1:
+        return False
+    # Prefer up to two lines, no more than 28 characters on each.
+    words = title.split()
+    lines = []
+    current = ""
+    for word in words:
+        if len(current) + len(word) + (1 if current else 0) > 28 and current:
+            lines.append(current)
+            current = ""
+        current = f"{current} {word}".strip()
+    if current:
+        lines.append(current)
+    if len(lines) > 2:
+        lines = lines[:2]
+        if len(lines[1]) > 25:
+            lines[1] = lines[1][:24].rstrip() + "…"
+    value = r"\N".join(lines).upper()
+    # Main captions are bottom-aligned; hook occupies top safe-zone, avoiding
+    # platform profile controls and ensuring the video itself stays visible.
+    script = [
+        "[Script Info]", "ScriptType: v4.00+", "PlayResX: 720", "PlayResY: 1280",
+        "ScaledBorderAndShadow: yes", "", "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding",
+        "Style: Hook,DejaVu Sans,49,&H00FFFFFF,&H00000000,&H00000000,"
+        "&H78000000,-1,0,0,0,100,100,0,0,3,3,1,8,45,45,180,1",
+        "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        f"Dialogue: 0,{_ass_time(0)},{_ass_time(min(3.2, duration))},"
+        f"Hook,,0,0,0,,{value}",
+    ]
+    path.write_text("\n".join(script) + "\n", encoding="utf-8")
+    return True

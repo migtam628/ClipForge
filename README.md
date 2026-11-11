@@ -105,6 +105,41 @@ outside trusted Tailscale access.
 See [yt-dlp cookie instructions](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)
 and [YouTube Extractors guidance](https://github.com/yt-dlp/yt-dlp/wiki/Extractors).
 
+## Clip Editor: non-destructive revisions and opening hooks
+
+ClipForge **0.4** adds a per-clip editor in **Library**. Open **Refine this clip**
+on any completed video to adjust:
+
+- **Start and length:** precision trim within the original video, 3–120 seconds.
+- **Headline:** an optional 3-second, top-of-frame hook overlay, with a
+  bounded, sanitized title for short-form social videos.
+- **Framing and look:** crop/pad plus natural, vibrant, cinematic and noir.
+- **Captions:** burned-in white, yellow or neon captions from cached
+  Whisper transcription, or regenerate the transcription only if missing.
+- **Commentator:** edit the script and explicitly opt in to a new ElevenLabs
+  voiceover. This may incur an API charge and is **off by default**.
+  Editing script text alone does not produce spoken audio.
+
+Each edit creates a versioned `clip-001-v01.mp4` or subsequent MP4. The
+original file is retained and can be downloaded from **Earlier versions**.
+The latest version is what Library previews, Publishing sends when newly
+approved, and the ZIP export includes. Existing publication records for
+older files are preserved; already-published videos are not changed.
+Each clip allows up to 20 revisions, and input timing is constrained to the
+source duration.
+
+A revision is queued in the same single worker as job processing to avoid
+overloading CPU-only machines. If a container restarts, unpaid local edits
+can resume automatically. Interrupted paid TTS edits instead enter a failed
+revision state without automatic retry to avoid duplicate charges. The
+previous MP4 stays intact if any revision fails.
+
+The Studio can optionally add an AI-selected **Opening headline** to newly
+generated clips, and the preference is saved under **Settings**. The hook is
+taken from the selected highlight's title; audio-energy clips with no title
+do not get an invented headline. Headline overlays and captions use FFmpeg
+libass and remain reviewable before publishing.
+
 ## Workspace navigation
 
 ClipForge now has **five distinct page URLs** with real navigation:
@@ -270,6 +305,10 @@ Run your existing host-Tailscale deployment with
 Keep Docker volumes; do not run `docker compose down -v`.
 ## API
 
+- `POST /api/jobs/{id}/clips/{number}/edit`: queue a bounded non-destructive revision for a completed job, supplying `start`, `duration`, `title`, `effect`, `framing`, `caption_style`, `hook_style`, optional `script` and `voiceover`. Paid TTS requires `voiceover_approved: true`; this is an explicit user consent, not a server secret.
+- Existing media endpoints expose current clips and prior revision filenames stored in the job's history. The bulk ZIP contains the latest clips only.
+
+
 API schema: `/api/docs`.
 
 - `POST /api/jobs`: `{ "url": "https://...", "rights_confirmed": true, "clip_seconds": 30, "max_clips": 25, "aspect_ratio": "9:16", "selection_mode": "ai", "caption_style": "bold", "effect": "pop", "framing": "crop" }`
@@ -300,7 +339,7 @@ This is a private single-user preview, not a public multi-tenant SaaS. Keep Tail
 
 ## Roadmap
 
-1. AI scene segmentation, sentence-aware trims, speaker/face tracking, animated captions and brand presets.
+1. AI scene segmentation, sentence-aware automatic trims, speaker/face tracking, animated captions and brand presets.
 2. Native OAuth account connection, account switching, token refresh UI and per-platform upload status verification.
 3. Publishing queues, drafts, approval workflows and optional scheduled posting **with explicit creator authorization**.
 4. Durable distributed queues, media retention policies, storage quotas and user authentication.
