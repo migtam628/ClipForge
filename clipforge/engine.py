@@ -249,6 +249,12 @@ def download_video(url: str, output_dir: Path) -> Path:
     import yt_dlp
 
     validate_url(url)
+    # Equivalent to yt-dlp --force-ipv4; scoped only to media imports.
+    # Many servers have IPv6 DNS records without a usable IPv6 default route.
+    ip_family = os.environ.get("CLIPFORGE_DOWNLOAD_IP_FAMILY", "ipv4").strip().lower()
+    families = {"ipv4": "0.0.0.0", "ipv6": "::", "auto": None}
+    if ip_family not in families:
+        raise ValueError("CLIPFORGE_DOWNLOAD_IP_FAMILY must be ipv4, ipv6, or auto")
     opts = {
         "outtmpl": str(output_dir / "source.%(ext)s"),
         # Prefer <=1080p video/audio, but accept an available resolution if the
@@ -267,6 +273,8 @@ def download_video(url: str, output_dir: Path) -> Path:
         "restrictfilenames": True,
         "extractor_args": {},
     }
+    if families[ip_family] is not None:
+        opts["source_address"] = families[ip_family]
     # A mounted private cookie file is optional; never copy it into job storage.
     # Use a writable temporary copy because yt-dlp may update cookies on exit.
     with youtube_cookie_session(url) as cookiefile:
@@ -285,6 +293,13 @@ def download_video(url: str, output_dir: Path) -> Path:
                     "then inspect available formats with yt-dlp -F (see the README). "
                     "If the video still has no usable streams, import an original MP4 "
                     "you are authorized to use, or retry later via Activity."
+                ) from exc
+            if "network is unreachable" in message:
+                raise RuntimeError(
+                    "Video source network is unreachable. ClipForge is configured "
+                    f"to use {ip_family} for media imports. Check that family from "
+                    "the container, then select Resume job in Activity. "
+                    "Docker, Tailscale, and other services are unaffected."
                 ) from exc
             if "sign in to confirm" in message or "not a bot" in message:
                 raise RuntimeError(
