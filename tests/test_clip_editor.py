@@ -1,7 +1,6 @@
 """Non-destructive Clip Library editor and safe-zone hook regression tests."""
 from __future__ import annotations
 
-import json
 import subprocess
 import time
 import zipfile
