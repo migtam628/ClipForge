@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
-from clipforge.captions import write_captions, write_narration_captions
+from clipforge.captions import write_captions, write_hook, write_narration_captions
 from clipforge.engine import (
     audio_energy,
     download_video,
@@ -77,6 +77,7 @@ class Options(BaseModel):
     caption_style: Literal["none", "classic", "bold", "neon"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop"] = "pad"
+    hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
     narration_language: Literal["en", "es"] = "en"
@@ -296,6 +297,11 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                         )
                     if added:
                         subtitles = ass
+                hook_file = None
+                if opts.hook_style == "headline" and candidate.get("title"):
+                    proposed = output / f"clip-{index:03d}-hook.ass"
+                    if write_hook(candidate["title"], candidate["duration"], proposed):
+                        hook_file = proposed
                 # A crash during FFmpeg must not leave a supposedly valid clip.
                 partial = output / f".clip-{index:03d}.partial.mp4"
                 partial.unlink(missing_ok=True)
@@ -303,7 +309,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     source_path, partial, candidate["start"], candidate["duration"],
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
                     framing=opts.framing, voiceover=voiceover,
-                    has_source_audio=info["has_audio"],
+                    has_source_audio=info["has_audio"], hook=hook_file,
                 )
                 os.replace(partial, destination)
                 try:
@@ -315,6 +321,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "captions_added": subtitles is not None, "effect": opts.effect,
                     "framing": opts.framing, "narration": opts.narration,
                     "script": script, "voiceover_added": voiceover is not None,
+                    "hook_style": opts.hook_style if hook_file else "none",
                     **candidate,
                 })
             _patch(folder, clips=clips, progress=max(
@@ -421,6 +428,7 @@ async def submit_upload(
     caption_style: str = Form("none"),
     effect: str = Form("none"),
     framing: str = Form("pad"),
+    hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
     narration_language: str = Form("en"),
@@ -432,7 +440,7 @@ async def submit_upload(
         opts = Options(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
-            effect=effect, framing=framing,
+            effect=effect, framing=framing, hook_style=hook_style,
             narration=narration, narration_style=narration_style,
             narration_language=narration_language,
         )
