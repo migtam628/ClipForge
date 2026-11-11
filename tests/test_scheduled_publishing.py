@@ -53,7 +53,7 @@ def test_scheduled_publish_does_not_post_before_approval_or_due(tmp_path, monkey
     assert module._dispatch_due_publications(future) == 2
     assert module._dispatch_due_publications(future) == 0
     assert len(submitted) == 2
-    assert {a[1] for a in submitted} == set(data["publication_ids"])
+    assert {a[2] for a in submitted} == set(data["publication_ids"])
 
 
 def test_schedule_validation_prevents_unconfigured_and_out_of_range(tmp_path, monkeypatch):
