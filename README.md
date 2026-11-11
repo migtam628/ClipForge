@@ -37,7 +37,7 @@ Open **http://127.0.0.1:8765**. On Windows, activate the virtual environment wit
 docker compose up --build -d
 ```
 
-Open **http://127.0.0.1:8765**. The Docker Compose sample intentionally binds to **localhost only** and stores job files in `./clipforge-data`.
+Open **http://127.0.0.1:8765**. The Docker Compose sample intentionally binds to **localhost only** and stores job files in a persistent Docker named volume (`clipforge_data`).
 
 ### Environment
 
