@@ -3,11 +3,11 @@ let activeTab = 'url';
 let polling = false;
 let platforms = [];
 let publishingPresets = [];
-const validPages = ['studio', 'library', 'publishing', 'activity', 'settings'];
+const validPages = ['studio', 'library', 'publishing', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
 const labels = {studio: 'Studio', library: 'Clip Library',
-  publishing: 'Publishing', activity: 'Activity', settings: 'Settings'};
+  publishing: 'Publishing', analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
 $('page-crumb').textContent = labels[currentPage];
 document.title = 'ClipForge · ' + labels[currentPage];
 for (const page of validPages) {
@@ -42,6 +42,8 @@ $('folder').addEventListener('change', () => { $('file').value = ''; updateUploa
 $('max-clips').addEventListener('change', updateCustomCount);
 $('narration').addEventListener('change', updateNarrationNotice);
 $('settings-form').addEventListener('submit', savePreferences);
+$('analytics-form').addEventListener('submit', saveAnalytics);
+$('analytics-refresh').addEventListener('click', loadAnalytics);
 
 function updateCustomCount() {
   $('custom-max-clips').hidden = $('max-clips').value !== 'custom';
@@ -833,6 +835,191 @@ async function loadSettings() {
     }
   } catch (err) {
     notify(err.message);
+  }
+}
+
+async function loadAnalytics() {
+  if (currentPage !== 'analytics') return;
+  try {
+    const [summaryResponse, jobsResponse] = await Promise.all([
+      fetch('/api/analytics/summary', {cache: 'no-store'}),
+      fetch('/api/jobs', {cache: 'no-store'})
+    ]);
+    if (!summaryResponse.ok || !jobsResponse.ok)
+      throw new Error('Analytics are not available on this server.');
+    const summary = await summaryResponse.json();
+    const jobs = await jobsResponse.json();
+    const options = $('analytics-clip');
+    const previous = options.value;
+    options.replaceChildren(el('option', '', 'External post / no associated clip'));
+    for (const job of jobs) {
+      for (const clip of job.clips || []) {
+        const option = el('option', '', (job.label || 'Video').slice(0, 60) +
+          ' · clip ' + clip.number);
+        option.value = job.id + '|' + clip.filename;
+        options.append(option);
+      }
+    }
+    if ([...options.options].some((item) => item.value === previous))
+      options.value = previous;
+    const money = (value) => '  event.preventDefault();
+  const data = {};
+  for (const [key, field] of Object.entries(settingsIds)) {
+    const raw = $('settings-' + field).value;
+    data[key] = ['clip_seconds', 'max_clips'].includes(key) ? Number(raw) : raw;
+  }
+  if (!Number.isInteger(data.max_clips) || data.max_clips < 1 ||
+      data.max_clips > 100) return notify('Maximum clips must be between 1 and 100.');
+  try {
+    const response = await fetch('/api/settings', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Could not save settings');
+    $('settings-feedback').textContent = 'Preferences saved.';
+  } catch (err) { notify(err.message); }
+}
+
+loadSettings();
+refresh();
+loadAnalytics();
+setInterval(() => {
+  if (!['library', 'publishing', 'activity'].includes(currentPage)) return;
+  // Do not recreate a video player while someone is watching it or editing a post.
+  if (![...document.querySelectorAll('video')].some((v) => !v.paused) &&
+      ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden) &&
+      ![...document.querySelectorAll('.clip-editor')].some((p) => p.open)) {
+    refresh();
+  }
+}, 5000);
+ + Number(value || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2, maximumFractionDigits: 2
+    });
+    const number = (value) => Number(value || 0).toLocaleString();
+
+    const stats = $('analytics-stats');
+    stats.replaceChildren();
+    for (const [value, label] of [
+      [number(summary.tracked_posts), 'Manually tracked posts'],
+      [number(summary.views), 'Reported views'],
+      [number(summary.engagements), 'Reported engagements'],
+      [money(summary.earnings_usd), 'Reported actual earnings']
+    ]) {
+      const item = el('div', 'stat-item');
+      item.append(el('strong', '', value), el('span', '', label));
+      stats.append(item);
+    }
+
+    const platformsPanel = $('analytics-platform-results');
+    platformsPanel.replaceChildren();
+    const maximum = Math.max(1, ...summary.by_platform.map((item) => item.views));
+    if (!summary.by_platform.length) {
+      platformsPanel.append(el('p', 'analytics-empty',
+        'No metrics recorded yet. Add a snapshot to see platform comparisons.'));
+    }
+    for (const item of summary.by_platform) {
+      const row = el('div', 'analytics-platform-row');
+      const title = el('div');
+      title.append(el('strong', '', item.platform.toUpperCase()),
+                   el('span', '', item.posts + ' post(s)'));
+      const bar = el('div', 'analytics-platform-bar');
+      const fill = el('div', 'analytics-platform-fill');
+      fill.style.width = Math.max(0, Math.min(100, item.views / maximum * 100)) + '%';
+      bar.append(fill);
+      row.append(title, bar,
+        el('span', '', number(item.views) + ' views · ' + money(item.earnings_usd) +
+          ' reported earnings'));
+      platformsPanel.append(row);
+    }
+
+    const recent = $('analytics-records');
+    recent.replaceChildren();
+    if (!summary.latest.length)
+      recent.append(el('p', 'analytics-empty',
+        'Record views and actual payouts to build your performance history.'));
+    for (const record of summary.latest) {
+      const item = el('div', 'analytics-record-item');
+      item.append(el('strong', '', record.platform.toUpperCase() + ' · ' +
+        (record.campaign_name || record.filename || 'External post')));
+      item.append(el('span', '', number(record.views) + ' views · ' +
+        money(record.earnings_usd) + ' · ' +
+        (record.campaign_status === 'none' ? 'No campaign' : record.campaign_status)));
+      item.append(el('small', '', 'Self-reported · ' +
+        new Date(record.captured_at).toLocaleString()));
+      if (record.post_url && record.post_url.startsWith('https://')) {
+        const link = el('a', '', 'View post');
+        link.href = record.post_url;
+        link.rel = 'noopener noreferrer';
+        link.target = '_blank';
+        item.append(link);
+      }
+      const remove = el('button', 'small-action', 'Delete snapshot');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        if (!confirm('Delete this manual snapshot? An older snapshot may become current.'))
+          return;
+        const result = await fetch('/api/analytics/records/' + record.id,
+          {method: 'DELETE'});
+        if (result.ok) await loadAnalytics();
+        else notify('Could not delete this snapshot.');
+      });
+      item.append(remove);
+      recent.append(item);
+    }
+
+    const publicationGroup = $('analytics-publication-states');
+    publicationGroup.replaceChildren();
+    const rows = Object.entries(summary.publication_states || {});
+    if (!rows.length) publicationGroup.append(
+      el('p', 'analytics-empty', 'No provider upload records yet.'));
+    for (const [state, count] of rows)
+      publicationGroup.append(el('span', 'analytics-state-pill',
+        state + ' · ' + number(count)));
+  } catch (error) {
+    notify(error.message);
+  }
+}
+
+async function saveAnalytics(event) {
+  event.preventDefault();
+  const select = $('analytics-clip').value;
+  const [job_id, filename] = select ? select.split('|') : ['', ''];
+  const post_url = $('analytics-post-url').value.trim();
+  if (!post_url && !job_id)
+    return notify('Add a post URL or choose a saved ClipForge clip.');
+  const value = $('analytics-earnings').value;
+  if (value === '' || Number(value) < 0 || !Number.isFinite(Number(value)))
+    return notify('Enter the actual nonnegative payout received, or 0.');
+  const payload = {
+    platform: $('analytics-platform').value, job_id, filename, post_url,
+    views: Number($('analytics-views').value),
+    likes: Number($('analytics-likes').value),
+    comments: Number($('analytics-comments').value),
+    shares: Number($('analytics-shares').value),
+    saves: Number($('analytics-saves').value),
+    earnings_usd: Number(value).toFixed(2),
+    campaign_name: $('analytics-campaign').value,
+    campaign_status: $('analytics-campaign-status').value,
+    evidence_url: $('analytics-evidence').value.trim(),
+    notes: $('analytics-notes').value
+  };
+  const submit = $('analytics-submit');
+  submit.disabled = true;
+  try {
+    const response = await fetch('/api/analytics/records', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(
+      typeof result.detail === 'string' ? result.detail : 'Invalid performance entry');
+    notify('Manual performance snapshot saved. No platform data was fetched.');
+    await loadAnalytics();
+  } catch (error) {
+    notify(error.message);
+  } finally {
+    submit.disabled = false;
   }
 }
 
