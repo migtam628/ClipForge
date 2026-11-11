@@ -91,3 +91,28 @@ a.brand{color:inherit;text-decoration:none}
   .main-content{padding:32px 18px}
   h1{letter-spacing:-1.5px}
 }
+
+
+/* Phase 4: per-clip, non-destructive editing and version history */
+.clip-editor{margin-top:14px;border:1px solid #3b4451;border-radius:11px;background:#10151e;padding:12px}
+.clip-editor summary{cursor:pointer;font-size:12px;font-weight:750;color:#d4f268;list-style-position:inside}
+.clip-editor-form{margin-top:14px}
+.clip-edit-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+.clip-edit-field{display:flex;flex-direction:column;gap:7px;font-size:11px;color:#b3b9c3}
+.clip-edit-field:first-child,.clip-edit-field:last-child{grid-column:1/-1}
+.clip-edit-field input,.clip-edit-field select,.clip-edit-field textarea{
+ width:100%;min-width:0;box-sizing:border-box;background:#181d29;color:#f6f7fb;
+ border:1px solid #3f4654;border-radius:7px;padding:10px;font-size:12px;
+}
+.clip-edit-field textarea{resize:vertical}
+.clip-edit-consent{display:flex;align-items:flex-start;gap:9px;color:#c8ced6;font-size:11px;line-height:1.5;margin:12px 0}
+.clip-edit-consent input{flex:0 0 auto;margin-top:2px}
+.clip-edit-consent[hidden]{display:none}
+.clip-edit-actions{display:flex;margin:14px 0}
+.clip-edit-actions button{width:100%;cursor:pointer}
+.clip-edit-actions button:disabled{opacity:.5;cursor:not-allowed}
+.clip-edit-history{display:flex;flex-wrap:wrap;gap:9px;margin-top:14px;padding-top:12px;border-top:1px solid #38404e}
+.clip-edit-history strong{flex-basis:100%;font-size:11px;color:#b7c2c8}
+.clip-edit-history a{font-size:11px;color:#d4f268}
+.editor-progress{margin-top:12px!important;color:#d4f268!important;font-size:12px!important}
+@media(max-width:500px){.clip-edit-fields{grid-template-columns:minmax(0,1fr)}}

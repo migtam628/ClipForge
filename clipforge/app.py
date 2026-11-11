@@ -337,6 +337,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "framing": opts.framing, "narration": opts.narration,
                     "script": script, "voiceover_added": voiceover is not None,
                     "hook_style": opts.hook_style if hook_file else "none",
+                    "caption_style": opts.caption_style if subtitles else "none",
                     **candidate,
                 })
             _patch(folder, clips=clips, progress=max(
@@ -428,7 +429,7 @@ def get_settings():
     try:
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
             selection_mode="ai", caption_style="bold", effect="pop",
-            framing="crop", max_clips=5,
+            framing="crop", max_clips=5, hook_style="headline",
         )
     except ValueError:
         defaults = Options()
