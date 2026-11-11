@@ -87,6 +87,7 @@ async function createJob() {
     caption_style: $('caption-style').value,
     effect: $('effect').value,
     framing: $('framing').value,
+    hook_style: $('hook-style').value,
     narration: $('narration').value,
     narration_style: $('narration-style').value,
     narration_language: $('narration-language').value,
@@ -135,6 +136,152 @@ function el(tag, cls, content) {
   return node;
 }
 
+function buildClipEditor(job, clip) {
+  const editor = el('details', 'clip-editor');
+  editor.append(el('summary', '', '✦ Refine this clip'));
+  const form = el('form', 'clip-editor-form');
+  const fields = el('div', 'clip-edit-fields');
+
+  function control(labelText, node) {
+    const field = el('label', 'clip-edit-field');
+    field.append(el('span', '', labelText), node);
+    fields.append(field);
+    return node;
+  }
+  function dropdown(labelText, options, selected) {
+    const select = el('select');
+    for (const [value, label] of options) {
+      const option = el('option', '', label);
+      option.value = value;
+      select.append(option);
+    }
+    select.value = selected;
+    return control(labelText, select);
+  }
+
+  const title = el('input');
+  title.value = clip.title || '';
+  title.maxLength = 100;
+  title.placeholder = 'An irresistible opening hook';
+  control('Headline / title', title);
+
+  const start = el('input');
+  start.type = 'number';
+  start.min = '0';
+  start.max = String(job.duration || 999999);
+  start.step = '0.1';
+  start.value = String(clip.start);
+  start.required = true;
+  control('Start time (seconds)', start);
+
+  const duration = el('input');
+  duration.type = 'number';
+  duration.min = '3';
+  duration.max = '120';
+  duration.step = '0.1';
+  duration.value = String(clip.duration);
+  duration.required = true;
+  control('Length (seconds)', duration);
+
+  const effect = dropdown('Color treatment', [
+    ['none', 'Natural'], ['pop', 'Vibrant pop'],
+    ['cinema', 'Cinematic'], ['noir', 'Black & white']
+  ], clip.effect || job.options.effect);
+
+  const framing = dropdown('Framing', [
+    ['crop', 'Crop to fill'], ['pad', 'Keep full frame']
+  ], clip.framing || job.options.framing);
+
+  const captions = dropdown('Captions', [
+    ['bold', 'Bold yellow'], ['classic', 'Classic white'],
+    ['neon', 'Neon pink'], ['none', 'No captions']
+  ], clip.caption_style || (clip.captions_added ? job.options.caption_style : 'none'));
+
+  const hook = dropdown('Opening headline', [
+    ['headline', 'Show first 3 seconds'], ['none', 'No headline']
+  ], clip.hook_style || 'none');
+
+  const script = el('textarea');
+  script.rows = 3;
+  script.maxLength = 1200;
+  script.value = clip.script || '';
+  script.placeholder = 'Optional custom narration script';
+  control('Commentator script (optional)', script);
+
+  const voiceRow = el('label', 'clip-edit-consent');
+  const voice = el('input');
+  voice.type = 'checkbox';
+  voiceRow.append(voice, el('span', '',
+    'Generate new spoken commentary with ElevenLabs (external API, may incur a charge)'));
+  const approvalRow = el('label', 'clip-edit-consent');
+  const approval = el('input');
+  approval.type = 'checkbox';
+  approvalRow.append(approval, el('span', '',
+    'I approve the external text-to-speech request and possible usage charge.'));
+  approvalRow.hidden = true;
+  voice.addEventListener('change', () => { approvalRow.hidden = !voice.checked; });
+
+  const explain = el('p', 'helper-note',
+    'Edits use the original video. A new MP4 is rendered; earlier versions stay available. Narration is off by default to avoid unexpected API charges.');
+  const actions = el('div', 'clip-edit-actions');
+  const save = el('button', 'small-action primary-action', 'Render revised clip');
+  save.type = 'submit';
+  if (['queued', 'rendering'].includes(clip.revision_state)) save.disabled = true;
+  actions.append(save);
+  form.append(fields, voiceRow, approvalRow, explain, actions);
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const begin = Number(start.value);
+    const span = Number(duration.value);
+    if (!Number.isFinite(begin) || !Number.isFinite(span) ||
+        span < 3 || span > 120 || begin < 0 ||
+        begin + span > Number(job.duration || 0) + 0.05)
+      return notify('Trim needs to fit within the original video (3–120 seconds).');
+    if (voice.checked && (!approval.checked || !script.value.trim()))
+      return notify('Enter a script and approve ElevenLabs usage to create a voiceover.');
+    const settings = {
+      start: begin, duration: span, title: title.value.trim(),
+      effect: effect.value, framing: framing.value,
+      caption_style: captions.value, hook_style: hook.value,
+      script: script.value.trim(), voiceover: voice.checked,
+      voiceover_approved: approval.checked && voice.checked
+    };
+    save.disabled = true;
+    try {
+      const url = '/api/jobs/' + job.id + '/clips/' + clip.number + '/edit';
+      const response = await fetch(url, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(settings)
+      });
+      const result = await response.json();
+      if (!response.ok)
+        throw new Error(typeof result.detail === 'string'
+          ? result.detail : 'Could not queue clip edit');
+      notify('Clip revision queued. The previous video stays playable.');
+      editor.open = false;
+      await refresh();
+    } catch (error) {
+      notify(error.message);
+      save.disabled = false;
+    }
+  });
+  editor.append(form);
+  if (clip.revision_history && clip.revision_history.length) {
+    const versions = el('div', 'clip-edit-history');
+    versions.append(el('strong', '', 'Earlier versions'));
+    for (const prior of clip.revision_history) {
+      if (!prior.filename) continue;
+      const link = el('a', '', '↓ ' + prior.filename);
+      link.href = '/api/jobs/' + job.id + '/clips/' + prior.filename;
+      link.download = prior.filename;
+      versions.append(link);
+    }
+    editor.append(versions);
+  }
+  return editor;
+}
+
 function card(job, mode = currentPage) {
   const wrapper = el('article', 'job');
   const head = el('div', 'job-head');
@@ -177,6 +324,12 @@ function card(job, mode = currentPage) {
       if (clip.reason) description.append(el('p', 'clip-ai-reason', clip.reason));
       if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
       if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
+      if (clip.hook_style === 'headline') description.append(el('span', 'clip-tag', '✦ Opening hook'));
+      if (clip.revision_count) description.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
+      if (clip.revision_state === 'queued' || clip.revision_state === 'rendering')
+        description.append(el('p', 'editor-progress', '⌁ Rendering your edited version…'));
+      if (clip.revision_state === 'failed')
+        description.append(el('p', 'error', clip.revision_error || 'Clip revision failed. The previous version is still available.'));
       if (clip.script) {
         const scriptDetails = el('details', 'script-details');
         const toggle = el('summary', '', 'Read AI commentary script');
@@ -190,6 +343,9 @@ function card(job, mode = currentPage) {
         });
         scriptDetails.append(toggle, scriptText, copyButton);
         description.append(scriptDetails);
+      }
+      if (job.status === 'completed' && mode === 'library') {
+        description.append(buildClipEditor(job, clip));
       }
       if (job.status === 'completed' && mode === 'publishing') {
         const available = platforms.filter((p) => p.configured);
@@ -388,6 +544,7 @@ const settingsIds = {
   caption_style: 'caption-style',
   effect: 'effect',
   framing: 'framing',
+  hook_style: 'hook-style',
   narration: 'narration',
   narration_style: 'narration-style',
   narration_language: 'narration-language',
@@ -482,7 +639,8 @@ setInterval(() => {
   if (!['library', 'publishing', 'activity'].includes(currentPage)) return;
   // Do not recreate a video player while someone is watching it or editing a post.
   if (![...document.querySelectorAll('video')].some((v) => !v.paused) &&
-      ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden)) {
+      ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden) &&
+      ![...document.querySelectorAll('.clip-editor')].some((p) => p.open)) {
     refresh();
   }
 }, 5000);
