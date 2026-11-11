@@ -4,8 +4,8 @@ from urllib.error import URLError
 
 from fastapi.testclient import TestClient
 
-from clipforge import ai, app as module
-
+from clipforge import ai
+from clipforge import app as module
 
 client = TestClient(module.app)
 
