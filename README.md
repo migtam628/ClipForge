@@ -39,10 +39,10 @@ Some accounts may still be blocked, and cookies may become invalid or rotate.
 
 ```bash
 cd ~/ClipForge
-mkdir -p private-auth
+# Make the directory writable by your SSH user and readable by ClipForge (GID 10001).
+sudo install -d -m 750 -o "$(id -un)" -g 10001 private-auth
 # Copy your YouTube-only Netscape cookie export into private-auth/youtube.txt
-sudo chgrp 10001 private-auth private-auth/youtube.txt
-chmod 750 private-auth
+sudo chgrp 10001 private-auth/youtube.txt
 chmod 640 private-auth/youtube.txt
 docker compose --profile ai up -d --force-recreate clipforge
 docker compose --profile ai exec clipforge python -c \
