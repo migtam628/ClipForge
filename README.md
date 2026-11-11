@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.6.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.7.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
@@ -58,6 +58,43 @@ API: `POST /api/jobs/batch` (JSON `urls` plus clip options), `POST
 /api/uploads/batch` (multipart repeated `files` plus options), and
 `GET /api/batches` (summary counts). This is sequential batch processing,
 not simultaneous 100-video encoding or a distributed worker cluster.
+
+## Multi-platform scheduling and presets (v0.7)
+
+Open **Publishing** and select a completed MP4. You can still send the video
+manually or choose **Schedule to multiple platforms**. Only destinations
+with server-side credentials configured are offered; this does **not** mean
+that OAuth tokens or app permissions have been independently verified.
+
+For scheduled posts, you must explicitly select the destinations, title,
+visibility, and a local date/time, and confirm that ClipForge may perform
+the external transfer later. The API accepts a timezone-aware instant from
+1 minute to 30 days ahead. The single outbound worker checks scheduled posts
+approximately every 15 seconds while ClipForge is running, dispatching
+each approved destination separately. Schedules persist across Docker restarts.
+TikTok's API integration sends an **inbox draft**, not a published TikTok post.
+
+Save up to ten non-secret **publishing presets** for reusable platform sets,
+description/hashtags and visibility. Credentials remain only in the server
+environment.
+
+Publication records distinguish `scheduled`, `queued`, `uploading`,
+`published`, `sent_to_inbox`, `failed`, and `needs_review`.
+If the container stops with an in-progress upload, ClipForge **does not**
+automatically retry it: the remote platform may have accepted the media.
+First check your account, then explicitly acknowledge the duplicate-post
+risk before retrying. Future schedules can be canceled up until dispatch.
+
+Existing uploaded video versions remain immutable after a clip edit.
+A scheduled post always references the exact MP4 chosen at approval time.
+Publishing is best-effort via authorized official APIs and may require
+additional platform permissions, account verification or review.
+Do not assume success without reviewing the provider-side result.
+
+New API routes: `POST /api/jobs/{id}/schedule`, `GET
+/api/publishing/queue`, `POST /api/jobs/{id}/publications/{pub_id}/cancel`,
+`POST /api/jobs/{id}/publications/{pub_id}/reapprove` (explicit duplicate
+check), and `GET/PUT /api/publishing/presets`.
 
 ## What it does
 
