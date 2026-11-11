@@ -12,6 +12,48 @@
 - **Creator review**: browse job progress, previews, thumbnails, captions/effects badges, and AI-generated titles, then download MP4 or bulk ZIP.
 - **Social publishing**: after reviewing each clip, explicitly authorize transfer to connected YouTube Shorts, Instagram Reels and Facebook Page Reels, or send a draft to the TikTok inbox for final posting. Platforms may restrict access or require developer approval.
 
+## YouTube format availability and player challenges
+
+YouTube may return `Requested format is not available` either because a
+video lacks the preferred resolution **or** because yt-dlp could not obtain
+playable video streams. ClipForge now prefers sources at 1080p or below, with
+fallbacks for other available resolutions. It keeps the 2 GB source limit.
+
+The Docker image now includes official **Deno** (JavaScript runtime) and
+`yt-dlp[default]` including **yt-dlp-ejs**. These components are required
+by current yt-dlp YouTube extractors for many player challenges. A cookie
+file alone does not provide the missing JavaScript runtime. The Docker image
+smoke test checks both dependencies.
+
+To inspect formats for an **authorized** YouTube URL inside the container,
+without exposing login cookies in logs or modifying the protected cookie file:
+
+```bash
+cd ~/ClipForge
+docker compose --profile ai exec -T clipforge python - <<'PY'
+import yt_dlp
+from clipforge.import_auth import youtube_cookie_session
+
+url = "https://www.youtube.com/watch?v=Y7kBmcWKLxg"
+with youtube_cookie_session(url) as cookies:
+    options = {"listformats": True, "skip_download": True}
+    if cookies:
+        options["cookiefile"] = str(cookies)
+    with yt_dlp.YoutubeDL(options) as downloader:
+        downloader.extract_info(url, download=False)
+PY
+```
+
+The format table should include playable video/audio options, not only
+storyboard entries (e.g., sb0/sb1). If no playable formats are listed,
+repeated format retries will not fix the request. Use an original MP4
+provided by the rights holder or downloaded through YouTube Studio when
+available. After updating Docker, select **Activity → Resume job**;
+previously saved source media, transcripts and clips remain intact.
+
+References: [yt-dlp EJS setup](https://github.com/yt-dlp/yt-dlp/wiki/EJS)
+and [yt-dlp format selection](https://github.com/yt-dlp/yt-dlp#format-selection).
+
 ## YouTube account verification on authorized imports
 
 Sometimes yt-dlp reports **"Sign in to confirm you're not a bot"** when

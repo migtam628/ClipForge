@@ -98,6 +98,12 @@ def test_download_uses_temp_cookies_for_youtube_only(monkeypatch, tmp_path):
     monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeDownloader)
     assert download_video("https://www.youtube.com/watch?v=abc", tmp_path).exists()
     assert calls[0].get("cookiefile")
+    # Prefer source quality <=1080p, but don't fail when the only playable
+    # video track exceeds that resolution.
+    selector = calls[0]["format"]
+    assert "height<=?1080" in selector
+    assert selector.endswith("/bv*+ba/b")
+    assert calls[0]["format_sort"] == ["res:1080"]
     assert not __import__("pathlib").Path(copied_paths[0]).exists()
     (tmp_path / "source.mp4").unlink()
     assert download_video("https://vimeo.com/123", tmp_path).exists()
@@ -129,3 +135,32 @@ def test_youtube_verification_failure_has_recovery_instructions(monkeypatch, tmp
     with pytest.raises(RuntimeError, match="YouTube requested account verification") as error:
         download_video("https://www.youtube.com/watch?v=test", tmp_path)
     assert "Resume job in Activity" in str(error.value)
+
+
+def test_unavailable_formats_explain_missing_media_and_recovery(monkeypatch, tmp_path):
+    import yt_dlp
+
+    monkeypatch.delenv(import_auth.COOKIE_ENV, raising=False)
+    monkeypatch.setattr(import_auth, "DEFAULT_PATH", str(tmp_path / "not-found.txt"))
+
+    class MissingFormatsDownloader:
+        def __init__(self, options):
+            self.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def download(self, urls):
+            assert self.options["format"].endswith("/bv*+ba/b")
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: [youtube] Y7kBmcWKLxg: Requested format is not available"
+            )
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", MissingFormatsDownloader)
+    with pytest.raises(RuntimeError, match="YouTube did not provide a playable video format") as exc:
+        download_video("https://www.youtube.com/watch?v=Y7kBmcWKLxg", tmp_path)
+    assert "Deno and yt-dlp-ejs" in str(exc.value)
+    assert "Activity" in str(exc.value)
