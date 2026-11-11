@@ -23,8 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from clipforge import __version__
-from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
+from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
 from clipforge.captions import write_captions, write_hook, write_narration_captions
 from clipforge.engine import (
     audio_energy,
