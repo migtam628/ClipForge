@@ -88,6 +88,21 @@ class UrlRequest(Options):
     rights_confirmed: bool = False
 
 
+class ClipEditRequest(BaseModel):
+    """Non-destructive clip revision; narrator use requires explicit consent."""
+
+    start: float = Field(ge=0)
+    duration: float = Field(ge=3, le=120)
+    title: str = Field(default="", max_length=100)
+    effect: Literal["none", "pop", "cinema", "noir"] = "none"
+    framing: Literal["pad", "crop"] = "crop"
+    caption_style: Literal["none", "classic", "bold", "neon"] = "bold"
+    hook_style: Literal["none", "headline"] = "headline"
+    script: str = Field(default="", max_length=1200)
+    voiceover: bool = False
+    voiceover_approved: bool = False
+
+
 class PublishRequest(BaseModel):
     filename: str = Field(min_length=8, max_length=80)
     platform: Literal["youtube", "instagram", "facebook", "tiktok"]
@@ -501,12 +516,175 @@ def get_job(job_id: str):
     return _read(folder)
 
 
+def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
+    """Render versioned media and atomically replace the active clip metadata.
+
+    Original MP4s are retained in revision history. A failed edit never
+    destroys a published or downloaded prior version.
+    """
+    destination = None
+    try:
+        with LOCK:
+            job = _read(folder)
+            clip = next(c for c in job["clips"] if c["number"] == number)
+            version = clip.get("revision_count", 0) + 1
+            clip["revision_state"] = "rendering"
+            _write(folder, job)
+        edit = ClipEditRequest(**request)
+        source = recover_source(folder, job)
+        if source is None:
+            raise FileNotFoundError("Original source is missing; the saved clip is unchanged")
+        info = probe(source)
+        if edit.start + edit.duration > info["duration"] + 0.05:
+            raise ValueError("Clip trim extends past the end of the original video")
+        output = folder / "clips"
+        base = f"clip-{number:03d}-v{version:02d}"
+        destination = output / f"{base}.mp4"
+        partial = output / f".{base}.partial.mp4"
+        partial.unlink(missing_ok=True)
+
+        voiceover = None
+        subtitles = None
+        if edit.voiceover:
+            if not edit.voiceover_approved or not edit.script.strip():
+                raise ValueError("Voiceover requires a script and explicit API-charge approval")
+            require_voice_config()
+            narration_dir = folder / "narration"
+            narration_dir.mkdir(exist_ok=True)
+            voiceover = synthesize(edit.script.strip(), narration_dir / f"{base}.mp3")
+        if edit.caption_style != "none":
+            ass = output / f"{base}.ass"
+            if voiceover is not None:
+                added = write_narration_captions(
+                    edit.script, audio_duration(voiceover),
+                    edit.duration, edit.caption_style, ass,
+                )
+            else:
+                transcript = load_json(folder / "transcript.json")
+                if not isinstance(transcript, list):
+                    if not info["has_audio"]:
+                        raise ValueError("Original video has no speech for automatic captions")
+                    transcript = transcribe(source, DATA_DIR / "models")
+                    save_json(folder / "transcript.json", transcript)
+                added = write_captions(
+                    transcript, edit.start, edit.duration, edit.caption_style, ass,
+                )
+            if added:
+                subtitles = ass
+
+        hook_file = None
+        if edit.hook_style == "headline" and edit.title.strip():
+            ass = output / f"{base}-hook.ass"
+            if write_hook(edit.title, edit.duration, ass):
+                hook_file = ass
+
+        render_clip(
+            source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
+            captions=subtitles, effect=edit.effect, framing=edit.framing,
+            voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
+        )
+        os.replace(partial, destination)
+        thumbnail_path = output / f"{base}.jpg"
+        thumbnail = None
+        try:
+            render_thumbnail(destination, thumbnail_path)
+            thumbnail = thumbnail_path.name
+        except (OSError, RuntimeError):
+            LOGGER.warning("Thumbnail unavailable for revised clip %s", base)
+        # Commit metadata only after a playable final MP4 exists.
+        with LOCK:
+            current = _read(folder)
+            target = next(c for c in current["clips"] if c["number"] == number)
+            history = target.get("revision_history", [])
+            history.append({
+                key: target.get(key) for key in (
+                    "filename", "thumbnail", "start", "duration", "title",
+                    "effect", "framing", "captions_added", "voiceover_added",
+                    "hook_style", "script",
+                )
+            })
+            target.update(
+                filename=destination.name, thumbnail=thumbnail,
+                start=round(edit.start, 2), duration=round(edit.duration, 2),
+                title=edit.title.strip(), effect=edit.effect, framing=edit.framing,
+                captions_added=subtitles is not None,
+                caption_style=edit.caption_style,
+                hook_style=edit.hook_style if hook_file else "none",
+                voiceover_added=voiceover is not None,
+                narration="narrated" if voiceover else ("script" if edit.script.strip() else "none"),
+                script=edit.script.strip() or None,
+                revision_count=version, revision_history=history,
+                revision_state="completed", revision_error=None,
+                revision_request=None,
+            )
+            _write(folder, current)
+            # Existing ZIP must not return outdated clips after edits.
+            (folder / "clipforge-clips.zip").unlink(missing_ok=True)
+        LOGGER.info("ClipForge clip %s revision %d complete", number, version)
+    except Exception as exc:
+        LOGGER.exception("ClipForge clip %s revision failed", number)
+        with LOCK:
+            try:
+                job = _read(folder)
+                clip = next(c for c in job["clips"] if c["number"] == number)
+                clip["revision_state"] = "failed"
+                clip["revision_error"] = f"{type(exc).__name__}: {str(exc)[:350]}"
+                # Keep the request for diagnosis, but never retry charged TTS automatically.
+                _write(folder, job)
+            except (FileNotFoundError, StopIteration, ValueError):
+                LOGGER.warning("Clip metadata disappeared during revision failure")
+    finally:
+        if destination is not None:
+            (folder / "clips" / ("." + destination.stem + ".partial.mp4")).unlink(
+                missing_ok=True
+            )
+
+
+@app.post("/api/jobs/{job_id}/clips/{number}/edit", status_code=202)
+def edit_clip(job_id: str, number: int, body: ClipEditRequest):
+    """Queue one individual re-render; other clips and publications remain intact."""
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        if job["status"] != "completed":
+            raise HTTPException(409, "Only completed jobs can be edited")
+        clip = next((c for c in job["clips"] if c.get("number") == number), None)
+        if clip is None:
+            raise HTTPException(404, "Clip not found")
+        if clip.get("revision_state") in {"queued", "rendering"}:
+            raise HTTPException(409, "This clip is already being edited")
+        if clip.get("revision_count", 0) >= 20:
+            raise HTTPException(429, "Maximum 20 revisions per clip")
+        if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
+            raise HTTPException(422, "Trim must fit inside the original video's duration")
+        if body.voiceover and (not body.voiceover_approved or not body.script.strip()):
+            raise HTTPException(400, "Explicit approval and a script are required for paid TTS")
+        if body.voiceover:
+            try:
+                require_voice_config()
+            except (ValueError, RuntimeError) as exc:
+                raise HTTPException(409, str(exc)) from exc
+        clip.update(
+            revision_state="queued", revision_error=None,
+            revision_request=body.model_dump(),
+        )
+        _write(folder, job)
+        POOL.submit(_edit_clip_worker, folder, number, body.model_dump())
+    return {"id": job_id, "clip": number, "state": "queued"}
+
+
 @app.get("/api/jobs/{job_id}/clips/{filename}")
 def get_clip(job_id: str, filename: str):
     folder = job_folder(job_id)
     job = _read(folder)
     allowed = {c["filename"] for c in job["clips"]}
     allowed.update(c["thumbnail"] for c in job["clips"] if c.get("thumbnail"))
+    for clip in job["clips"]:
+        for prior in clip.get("revision_history", []):
+            if prior.get("filename"):
+                allowed.add(prior["filename"])
+            if prior.get("thumbnail"):
+                allowed.add(prior["thumbnail"])
     if filename not in allowed or Path(filename).name != filename:
         raise HTTPException(404, "Clip not found")
     path = folder / "clips" / filename
@@ -585,6 +763,9 @@ def publish_clip(job_id: str, body: PublishRequest):
 def delete_job(job_id: str):
     folder = job_folder(job_id)
     job = _read(folder)
+    if any(c.get("revision_state") in {"queued", "rendering"}
+           for c in job.get("clips", [])):
+        raise HTTPException(409, "Cannot delete a job while a clip revision is running")
     if job["status"] in {"queued", "downloading", "analyzing", "transcribing",
                          "selecting", "rendering"} or any(
         p["state"] in {"queued", "uploading"} for p in job.get("publications", [])
