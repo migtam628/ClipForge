@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.5.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.6.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
@@ -30,6 +30,34 @@ OpenCV is installed in the Docker AI image via the headless Python package,
 which does not require an X11 desktop. The `smart` and `blur` options do
 not use cloud GPU services, send face data to external providers, or alter
 YouTube authentication or networking.
+
+## Batch workflows (v0.6)
+
+**Studio** now supports multiple uploaded videos, folder selection (Chrome and
+other browsers with directory upload support), and multiline source URLs.
+Each item becomes its own persistent job, with source media, transcription,
+AI scores and finished clips checkpointed individually. The server runs one
+video-processing worker at a time to keep CPU/RAM predictable.
+
+- Add up to **100 source videos per batch**, with an **8 GB aggregate upload
+  limit**, **2 GB per video**, and no more than **125 pending/active sources**.
+  These are different from the existing "1–100 clips per video" setting.
+- Select a folder of MP4, MOV, MKV or WebM files, or use the multi-file picker.
+  Other file extensions are omitted by the browser client and rejected by
+  the API if submitted manually.
+- Paste one URL per line in Studio. Duplicate URLs within the request are
+  removed before jobs are created.
+- Go to **Activity** for per-source status and batch completion counts. Failed
+  sources can be retried individually without rerunning completed sources.
+- Narrated batches require **explicit approval** for potentially paid
+  ElevenLabs requests in addition to source-rights confirmation.
+- Upload failures roll back staged job folders before any processing begins.
+  Existing jobs and completed clips remain untouched.
+
+API: `POST /api/jobs/batch` (JSON `urls` plus clip options), `POST
+/api/uploads/batch` (multipart repeated `files` plus options), and
+`GET /api/batches` (summary counts). This is sequential batch processing,
+not simultaneous 100-video encoding or a distributed worker cluster.
 
 ## What it does
 

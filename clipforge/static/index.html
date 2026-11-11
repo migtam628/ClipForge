@@ -42,8 +42,8 @@
             <button type="button" class="tab active" id="url-tab" aria-selected="true">↗ Video URL</button>
             <button type="button" class="tab" id="upload-tab" aria-selected="false">⇧ Upload file</button>
           </div>
-          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
-          <div id="upload-area" class="input-area" hidden><label for="file">Select video file</label><div class="drop-zone"><input id="file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/webm"><div class="drop-icon">⇧</div><strong>Choose a video file</strong><span>MP4 · MOV · MKV · WEBM, up to 2 GB</span></div></div>
+          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><label for="url-list" class="batch-extra-label">Or queue multiple URLs (one per line, up to 100)</label><textarea id="url-list" class="batch-url-list" rows="3" placeholder="https://youtu.be/video1&#10;https://youtu.be/video2"></textarea><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
+          <div id="upload-area" class="input-area" hidden><label for="file">Select video files</label><div class="drop-zone"><input id="file" type="file" multiple accept="video/mp4,video/quicktime,video/x-matroska,video/webm"><div class="drop-icon">⇧</div><strong>Choose one or many videos</strong><span>Up to 100 files · 2 GB each · 8 GB per batch</span></div><label for="folder" class="batch-extra-label">Or choose a folder of videos</label><input id="folder" type="file" webkitdirectory multiple aria-label="Choose a video folder"><p class="helper-note" id="batch-selection-hint">Videos are queued one at a time for CPU-friendly processing. Each keeps its own retry checkpoints.</p></div>
           <div class="settings-heading"><span class="step">02</span><div><h2>Clip settings</h2><p>Select the format, length and exact number of shorts</p></div></div>
           <div class="settings-grid">
             <div class="field"><label for="clip-seconds">Clip length</label><select id="clip-seconds"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">120 seconds</option></select></div>
@@ -90,6 +90,7 @@
       <section id="view-activity" class="page-view" hidden>
         <div class="page-heading"><div><div class="eyebrow">PROCESSING HISTORY</div><h1>Queue &amp; <span>Activity.</span></h1><p class="lede">Track transcription, highlight scoring, rendering and recovery, with detailed failure reasons and one-click resume.</p></div><button class="small-action" data-refresh type="button">↻ Refresh queue</button></div>
         <div class="stats-row" id="activity-stats"></div>
+        <div id="activity-batches" class="batch-summary"></div>
         <div id="jobs-activity" class="jobs"></div>
       </section>
 

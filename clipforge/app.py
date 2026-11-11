@@ -48,6 +48,9 @@ from clipforge.smart_frame import plan_face_tracking
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024
+MAX_BATCH_SOURCES = 100
+MAX_BATCH_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
+MAX_QUEUED_SOURCES = 125
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
 LOCK = threading.RLock()
@@ -87,6 +90,12 @@ class Options(BaseModel):
 class UrlRequest(Options):
     url: str
     rights_confirmed: bool = False
+
+
+class BatchUrlRequest(Options):
+    urls: list[str] = Field(min_length=1, max_length=MAX_BATCH_SOURCES)
+    rights_confirmed: bool = False
+    voice_spend_approved: bool = False
 
 
 class ClipEditRequest(BaseModel):
@@ -473,6 +482,137 @@ def submit_url(body: UrlRequest):
     return {"id": job_id, "status": "queued"}
 
 
+def _check_batch_capacity(count: int) -> None:
+    """Avoid unbounded uploads/jobs on a single-worker home server."""
+    if not 1 <= count <= MAX_BATCH_SOURCES:
+        raise HTTPException(422, "A batch requires 1 to 100 source videos")
+    queued = 0
+    for item in DATA_DIR.glob("*/job.json"):
+        try:
+            if _read(item.parent).get("status") in ACTIVE_STATES:
+                queued += 1
+        except (ValueError, OSError):
+            continue
+    if queued + count > MAX_QUEUED_SOURCES:
+        raise HTTPException(
+            429, "Too many queued sources. Finish or remove jobs before adding more."
+        )
+
+
+@app.post("/api/jobs/batch", status_code=202)
+def submit_urls_batch(body: BatchUrlRequest):
+    """Queue up to 100 authorized URL sources, one job/checkpoint per source."""
+    if not body.rights_confirmed:
+        raise HTTPException(400, "Confirm rights for every source in the batch")
+    if body.narration == "narrated" and not body.voice_spend_approved:
+        raise HTTPException(400, "Approve possible voice API charges for batch narration")
+    try:
+        urls = list(dict.fromkeys(validate_url(url) for url in body.urls))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _check_batch_capacity(len(urls))
+    options = Options(**body.model_dump())
+    batch_id = uuid.uuid4().hex
+    prepared = []
+    try:
+        for index, url in enumerate(urls, 1):
+            job_id, folder = _create("url", options, url)
+            prepared.append((job_id, folder, url))
+            _patch(
+                folder, batch_id=batch_id, batch_index=index,
+                batch_total=len(urls),
+            )
+    except Exception:
+        for _, folder, _ in prepared:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
+    for _, folder, url in prepared:
+        POOL.submit(_process, folder, None, url)
+    return {
+        "batch_id": batch_id, "job_ids": [item[0] for item in prepared],
+        "accepted": len(prepared), "status": "queued",
+    }
+
+
+@app.post("/api/uploads/batch", status_code=202)
+async def submit_upload_batch(
+    files: list[UploadFile] = File(...),
+    clip_seconds: int = Form(30),
+    max_clips: int = Form(25),
+    aspect_ratio: str = Form("9:16"),
+    selection_mode: str = Form("energy"),
+    caption_style: str = Form("none"),
+    effect: str = Form("none"),
+    framing: str = Form("pad"),
+    hook_style: str = Form("none"),
+    narration: str = Form("none"),
+    narration_style: str = Form("energetic"),
+    narration_language: str = Form("en"),
+    rights_confirmed: bool = Form(False),
+    voice_spend_approved: bool = Form(False),
+):
+    """Bounded multi-file upload with rollback and one persistent job per video."""
+    if not rights_confirmed:
+        raise HTTPException(400, "Confirm rights for all uploaded files")
+    try:
+        options = Options(
+            clip_seconds=clip_seconds, max_clips=max_clips,
+            aspect_ratio=aspect_ratio, selection_mode=selection_mode,
+            caption_style=caption_style, effect=effect,
+            framing=framing, hook_style=hook_style,
+            narration=narration, narration_style=narration_style,
+            narration_language=narration_language,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if options.narration == "narrated" and not voice_spend_approved:
+        raise HTTPException(400, "Approve possible voice API charges for batch narration")
+    _check_batch_capacity(len(files))
+    for item in files:
+        filename = (item.filename or "").replace("\\", "/").split("/")[-1]
+        if Path(filename).suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
+            raise HTTPException(400, "Every source must be MP4, MOV, MKV or WEBM")
+    batch_id = uuid.uuid4().hex
+    prepared = []
+    total_bytes = 0
+    try:
+        for index, item in enumerate(files, 1):
+            filename = (item.filename or "uploaded-video").replace("\\", "/").split("/")[-1]
+            suffix = Path(filename).suffix.lower()
+            job_id, folder = _create("upload", options, filename)
+            destination = folder / f"source{suffix}"
+            prepared.append((job_id, folder, destination))
+            _patch(
+                folder, batch_id=batch_id, batch_index=index,
+                batch_total=len(files),
+            )
+            length = 0
+            with destination.open("wb") as output:
+                while block := await item.read(1024 * 1024):
+                    length += len(block)
+                    total_bytes += len(block)
+                    if length > MAX_UPLOAD or total_bytes > MAX_BATCH_TOTAL_BYTES:
+                        raise HTTPException(
+                            413, "Each video must be <=2 GB and the batch <=8 GB"
+                        )
+                    output.write(block)
+            if not length:
+                raise HTTPException(400, "Empty video in batch")
+    except Exception:
+        for _, folder, _ in prepared:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
+    finally:
+        for item in files:
+            await item.close()
+    for _, folder, destination in prepared:
+        POOL.submit(_process, folder, destination, None)
+    return {
+        "batch_id": batch_id, "job_ids": [item[0] for item in prepared],
+        "accepted": len(prepared), "status": "queued",
+    }
+
+
 @app.post("/api/uploads", status_code=202)
 async def submit_upload(
     file: UploadFile = File(...),
@@ -532,7 +672,33 @@ def list_jobs():
             jobs.append(_read(job_file.parent))
         except (ValueError, OSError):
             pass
-    return sorted(jobs, key=lambda item: item["created_at"], reverse=True)[:50]
+    return sorted(jobs, key=lambda item: item["created_at"], reverse=True)[:250]
+
+
+@app.get("/api/batches")
+def list_batches():
+    """Summaries only; individual job statuses still come from /api/jobs."""
+    grouped = {}
+    for job in list_jobs():
+        batch_id = job.get("batch_id")
+        if not batch_id:
+            continue
+        batch = grouped.setdefault(batch_id, {
+            "id": batch_id, "total": job.get("batch_total", 0),
+            "completed": 0, "failed": 0, "queued": 0, "running": 0,
+            "created_at": job["created_at"],
+        })
+        state = job.get("status")
+        if state == "completed":
+            batch["completed"] += 1
+        elif state == "failed":
+            batch["failed"] += 1
+        elif state == "queued":
+            batch["queued"] += 1
+        else:
+            batch["running"] += 1
+        batch["created_at"] = min(batch["created_at"], job["created_at"])
+    return sorted(grouped.values(), key=lambda x: x["created_at"], reverse=True)
 
 
 @app.post("/api/jobs/{job_id}/resume", status_code=202)
