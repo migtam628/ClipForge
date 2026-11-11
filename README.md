@@ -1,112 +1,103 @@
 # ClipForge
 
-**Turn one authorized long-form video into a batch of short clips.** ClipForge is an early self-hosted, local-first web application for creators who own or have permission to edit their source media.
+**AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Version](https://img.shields.io/badge/version-0.1.0--preview-cce971) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.2.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
-## What works in v0.1.0
+## What it does
 
-- Browser dashboard with source URL or local video upload (MP4, MOV, MKV, WEBM).
-- YouTube, Twitch, Kick, Vimeo, Dailymotion, and TikTok URL adapters through `yt-dlp`, **best effort**: availability and download permission vary by platform and source. A listed site does not guarantee every URL works.
-- Automatic audio loudness/energy scoring to prioritize candidate segments. If there is no audio, ClipForge creates evenly spaced clips. **This is not semantic AI highlight recognition yet.**
-- Up to 100 *non-overlapping* clips per job, with 10–120 second durations; video clips shorter than the requested duration yield one shorter clip. Max source duration eight hours, max file size 2 GB.
-- Export MP4 at 9:16, 16:9 or 1:1, retaining the full shot via letterbox/padding.
-- Job queue, progress reporting, thumbnail and browser preview, individual downloads, bulk ZIP export, and job deletion.
-- Automated unit, API, and real FFmpeg integration tests on Python 3.11 and 3.12, packaging checks, then prerelease publication from `main`.
+- Sources: uploaded MP4, MOV, MKV or WEBM (up to 2 GB), or permitted HTTPS links via best-effort `yt-dlp` adapters for YouTube, Twitch, Kick, Vimeo, Dailymotion and TikTok. **Only use content you own or are authorized to download and edit.** YouTube API policies restrict downloading audiovisual content without authorization.
+- **AI highlight selection**: local `faster-whisper` transcribes speech with word timestamps and Ollama scores transcript windows for hooks, useful insights, stories and punchlines. The AI picks from bounded video timestamps, returns titles and reasons, and won't silently masquerade as AI when Ollama is offline. Source length limit: 8 hours; up to 100 clips of 10–120 seconds each.
+- **AI-assisted editing**: automatic timed captions (classic white, bold yellow, neon pink); color/effect presets (natural, vibrant pop, cinematic, black-and-white); optional crop-to-fill or full-frame padding at 9:16, 16:9 or 1:1. FFmpeg/libass creates the actual MP4 output. AI ranking and clipping remain imperfect; verify each clip before posting.
+- **Creator review**: browse job progress, previews, thumbnails, captions/effects badges, and AI-generated titles, then download MP4 or bulk ZIP.
+- **Social publishing**: after reviewing each clip, explicitly authorize transfer to connected YouTube Shorts, Instagram Reels and Facebook Page Reels, or send a draft to the TikTok inbox for final posting. Platforms may restrict access or require developer approval.
 
-### Important limitations
+## Docker (recommended)
 
-ClipForge is an **MVP**. It does not yet offer transcript/semantic AI, animated captions, active-speaker tracking, social publishing, authentication or multi-user controls. Audio energy is a simple proxy for highlights; it cannot determine whether a moment is funny, useful, or compelling. URL ingestion can fail when websites alter their playback systems, restrict downloads, require logins, use DRM, or forbid downloads. You must own the content or have the necessary permissions, and respect platform terms. YouTube's official API policies restrict downloading audiovisual content without prior authorization. **Use source-file upload whenever a platform does not permit video downloads.**
+Prerequisites: Docker Engine with Compose v2. Docker publishes ClipForge on **localhost only**, not publicly.
 
-## Run locally
+```bash
+git clone https://github.com/migtam628/ClipForge.git
+cd ClipForge
+docker compose --profile ai up --build -d
+docker compose exec ollama ollama pull llama3.2:3b
+curl -fsS http://127.0.0.1:8765/api/health
+```
 
-Prerequisites: Python 3.11+, `ffmpeg` and `ffprobe` on `PATH`.
+Open `http://127.0.0.1:8765`. AI is the browser's default mode; **starting Ollama and pulling its model is required** for AI selection. The first transcription downloads the selected Whisper model and long videos can require substantial CPU time and disk space. The default models are `CLIPFORGE_WHISPER_MODEL=base` and `CLIPFORGE_AI_MODEL=llama3.2:3b`. `--profile ai` starts the Ollama sidecar with persistent models in the Docker volume `ollama_models`. No Ollama port is exposed to the host. To use the earlier heuristic-only mode, `docker compose up --build -d` works; choose Audio-energy and No captions in the browser.
+
+For native Python 3.11+, install FFmpeg/FFprobe and run:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e '.[ai]'
+export CLIPFORGE_OLLAMA_URL=http://127.0.0.1:11434
 python -m clipforge
 ```
 
-Open **http://127.0.0.1:8765**. On Windows, activate the virtual environment with `.venv\\Scripts\\activate`.
+A separate local Ollama service with the selected model must be running for AI mode. Native Python starts bound to localhost by default. Docker listens on 0.0.0.0 *inside* its container, but `compose.yaml` binds only 127.0.0.1 on the host.
 
-### Docker Compose
+## Private Tailscale deployment
 
-```bash
-docker compose up --build -d
-```
+Choose **one** option. ClipForge currently lacks built-in user authentication; only trusted tailnet members should be allowed access. Never use Funnel or expose the application publicly.
 
-Open **http://127.0.0.1:8765**. The Docker Compose sample intentionally binds to **localhost only** and stores job files in a persistent Docker named volume (`clipforge_data`).
-
-### Access ClipForge through Tailscale (private HTTPS)
-
-Choose **one** of these deployment methods. ClipForge has no built-in login yet; keep access restricted to trusted tailnet users and devices.
-
-**Option A — Existing Tailscale host (recommended when Tailscale is installed on the Docker machine)**
+**A. Tailscale installed on the Docker host (simplest)**
 
 ```bash
-git clone https://github.com/migtam628/ClipForge.git
 cd ClipForge
-docker compose up --build -d
-curl -fsS http://127.0.0.1:8765/api/health
+docker compose --profile ai up --build -d
+docker compose exec ollama ollama pull llama3.2:3b
 tailscale serve --bg 8765
 tailscale serve status
 ```
 
-On another device connected to your tailnet, open the HTTPS address printed by Tailscale Serve, such as `https://<host>.<tailnet>.ts.net/`. You may first need to enable MagicDNS and HTTPS certificates in Tailscale. The ordinary `compose.yaml` intentionally binds port 8765 **only to 127.0.0.1**; leave it that way. On Linux, Tailscale commands may require `sudo`. To stop sharing, use `tailscale serve --https=443 off`. Background Serve resumes after reboot.
+Visit the Tailscale HTTPS hostname reported by `tailscale serve status` from another tailnet device. You may need MagicDNS/HTTPS enabled. On some Linux hosts, use `sudo tailscale ...`.
 
-**Option B — Tailscale in Docker (dedicated private ClipForge tailnet node)**
+**B. Dedicated Tailscale container / tailnet device**
 
-This mode creates a Tailscale device named `clipforge` using the official container and `compose.tailscale.yaml`. No host, LAN, or public ports are published. It uses userspace networking, so no `/dev/net/tun` or additional networking capabilities are required.
-
-1. Create a **non-ephemeral** Tailscale auth key using [Tailscale Keys](https://login.tailscale.com/admin/settings/keys). Do not commit or share the key.
-2. Copy `.env.example` to `.env`, then replace the example key with your own. `.env` is gitignored.
-3. Start the stack:
+Create a **non-ephemeral** Tailscale auth key at https://login.tailscale.com/admin/settings/keys and store it in the untracked `.env` file:
 
 ```bash
-git clone https://github.com/migtam628/ClipForge.git
 cd ClipForge
 cp .env.example .env
-# Edit .env to set TS_AUTHKEY to your own key before continuing.
-docker compose -f compose.tailscale.yaml up --build -d
-docker compose -f compose.tailscale.yaml exec tailscale tailscale status
+nano .env  # replace TS_AUTHKEY=tskey-auth-REPLACE_ME
+
+docker compose -f compose.tailscale.yaml --profile ai up --build -d
+docker compose -f compose.tailscale.yaml exec ollama ollama pull llama3.2:3b
 docker compose -f compose.tailscale.yaml exec tailscale tailscale serve status
 ```
 
-From another device in the same tailnet, visit the private HTTPS URL reported by Serve (normally `https://clipforge.<tailnet>.ts.net/`). The sidecar proxies HTTPS port 443 to ClipForge port 8765 in their shared network namespace. Tailscale may require MagicDNS and HTTPS to be enabled once. Its device identity survives container restarts via the `tailscale_state` named volume. After initial login, you can remove the auth key from `.env`: `TS_AUTH_ONCE=true` reuses saved state.
+Both ClipForge and its AI service remain private to Docker/Tailscale. Tailscale configuration is in `tailscale/serve.json`; the node identity is persisted in `tailscale_state`. When the node is authenticated, `TS_AUTH_ONCE=true` reuses its identity on restarts. Never run `docker compose down -v` unless you intentionally want to delete all jobs and Tailscale/AI state. After setup, remove the auth key from `.env` if possible. Access controls on your tailnet still apply; restrict them appropriately.
 
-Diagnostics and shutdown:
+## Connect social publishing
 
-```bash
-docker compose -f compose.tailscale.yaml ps
-docker compose -f compose.tailscale.yaml logs --tail=100 clipforge tailscale
-docker compose -f compose.tailscale.yaml exec tailscale tailscale ip -4
-docker compose -f compose.tailscale.yaml exec tailscale tailscale serve status
-docker compose -f compose.tailscale.yaml down
-```
+ClipForge 0.2 uses server-side credentials. **Browser-based account OAuth connection and token refresh management screens are not implemented yet.** Obtain approved credentials from your own platform developer applications. Add the matching variables to `.env` (never commit it); Compose maps them to the ClipForge process. Recreate the ClipForge container to apply changes: `docker compose --profile ai up -d --force-recreate clipforge` (or the matching Tailscale Compose command).
 
-Do **not** run `docker compose down -v` unless you intend to delete both the Tailscale identity and all ClipForge media/job data. The Tailscale-only deployment has its own Compose project and volumes; do not start both modes simultaneously. Tailscale access controls apply, but default rules may permit every tailnet user; restrict TCP 443 to trusted users. Never use Tailscale Funnel with this unauthenticated preview.
-### Environment
-
-| Variable | Default | Meaning |
+| Destination | Supported result | Environment variables |
 | --- | --- | --- |
-| `CLIPFORGE_HOST` | `127.0.0.1` | Local listener; Docker overrides it to 0.0.0.0 inside the container |
-| `CLIPFORGE_PORT` | `8765` | Listener port |
-| `CLIPFORGE_DATA_DIR` | `./clipforge-data` | Persistent job inputs and outputs |
+| YouTube / Shorts | Official resumable upload via `videos.insert`; defaults to **private**, gives video URL once submitted | `CLIPFORGE_YOUTUBE_CLIENT_ID`, `CLIPFORGE_YOUTUBE_CLIENT_SECRET`, `CLIPFORGE_YOUTUBE_REFRESH_TOKEN` (OAuth `youtube.upload` grant) |
+| Instagram Reels | Professional-account resumable upload, processing check, then publish | `CLIPFORGE_INSTAGRAM_TOKEN`, `CLIPFORGE_INSTAGRAM_USER_ID` (Meta Instagram publishing permissions) |
+| Facebook Page Reels | Page Reel session, binary upload, finish request | `CLIPFORGE_FACEBOOK_PAGE_ACCESS_TOKEN` (Page posting permissions) |
+| TikTok | **Inbox draft only**; user finishes publication in TikTok | `CLIPFORGE_TIKTOK_ACCESS_TOKEN` (`video.upload` scope / approved developer app) |
+| Other platforms | Download MP4/ZIP, then manually upload | None |
 
-**Security:** This preview has no login or authorization system. Do not expose it to the public Internet. Use localhost (or add a trusted authentication gateway first). Video URLs are restricted to selected HTTPS hostnames to reduce network request abuse, but external downloader dependencies should still be treated as untrusted input parsers. Submitted videos can consume significant disk space and CPU. Uploads and downloads are limited to 2 GB; the queue runs a single job at a time in one process. Don't start `uvicorn` with multiple worker processes.
+Connect to [Google Cloud](https://console.cloud.google.com/), [Meta for Developers](https://developers.facebook.com/) or [TikTok for Developers](https://developers.tiktok.com/) to configure the corresponding OAuth apps, scopes and consent. Existing API tokens/refresh tokens must be provisioned by the account owner; never paste them into ClipForge's public repository. Instagram/Facebook live integration can vary by permissions/account mode/API versions. For TikTok, **sent_to_inbox is not published**. YouTube/Facebook return **submitted** because site-side processing can still be in progress; Instagram returns **published** only once the publish endpoint returns a media ID. Do not assume a successful binary upload means the platform published the video.
+
+Every post requires review and a separate confirmation. **There is no automatic cross-posting without approval, scheduling, public URL hosting, or bulk auto-publish.** Even though Tailscale remains private, Instagram's resumable API accepts uploaded binary media; its URL-based variant is not used. Publishing integrations are beta: CI tests validate request structure using mocks, **not live account access or real external publication**.
 
 ## API
 
-Interactive OpenAPI docs at `/api/docs`.
+API schema: `/api/docs`.
 
-- `POST /api/jobs` with JSON `{ "url": "https://...", "rights_confirmed": true, "clip_seconds": 30, "max_clips": 25, "aspect_ratio": "9:16" }`
-- `POST /api/uploads` with multipart `file`, `rights_confirmed`, `clip_seconds`, `max_clips`, `aspect_ratio`
-- `GET /api/jobs`, `GET /api/jobs/{id}`
-- `GET /api/jobs/{id}/clips/{filename}`, `GET /api/jobs/{id}/export`
-- `DELETE /api/jobs/{id}` when completed or failed
-- `GET /api/health`
+- `POST /api/jobs`: `{ "url": "https://...", "rights_confirmed": true, "clip_seconds": 30, "max_clips": 25, "aspect_ratio": "9:16", "selection_mode": "ai", "caption_style": "bold", "effect": "pop", "framing": "crop" }`
+- `POST /api/uploads`: multipart file plus the same options, separately.
+- `GET /api/jobs`, `/api/jobs/{id}`, `/api/ai/status`, `/api/publishing/platforms`.
+- `GET /api/jobs/{id}/clips/{filename}`; `GET /api/jobs/{id}/export`.
+- `POST /api/jobs/{id}/publish`: `{ "filename": "clip-001.mp4", "platform": "youtube", "title": "My short", "description": "#shorts", "visibility": "private", "approved": true }`. Requires a completed job, a clip that belongs to it, and configured server credentials.
+- `DELETE /api/jobs/{id}` (only when processing/publishing is not ongoing).
+
+API defaults remain backward compatible (energy selection/no captions); browser defaults opt into AI editing. An API request for `selection_mode="ai"` fails transparently if the model service is unavailable. Unknown or unsupported media links and DRM-protected streams cannot be guaranteed to work.
 
 ## Tests and releases
 
@@ -117,27 +108,17 @@ pytest -q
 python -m build
 ```
 
-`.github/workflows/ci-release.yml` tests pull requests and `main` with Python 3.11 and 3.12, including actual FFmpeg processing of generated test footage. If all tests pass and the wheel/sdist builds, a push to `main` automatically publishes a GitHub **prerelease** named `v0.1.0-preview.<run number>` with distribution files attached. Failed tests block releases. Review the run on **Actions**, and download packaged source/wheel files from **Releases**. A release is not a deployed cloud instance; ClipForge still runs on your own machine/server.
+GitHub Actions checks Python 3.11/3.12, FFmpeg integration media renders, mocked publishing adapters, Docker Compose syntax, package artifacts and a Docker smoke test. A push to `main` publishes `v0.2.0-preview.<run-number>` **only after** tests and image checks succeed. External publishing is not exercised by CI. Check [Actions](https://github.com/migtam628/ClipForge/actions) and [Releases](https://github.com/migtam628/ClipForge/releases).
 
-### Current architecture
+## Security and limits
 
-```text
-Browser UI (HTML/CSS/JS)
-  -> FastAPI -> in-process single-worker queue
-     -> URL adapter (yt-dlp) / uploaded file
-     -> FFprobe -> FFmpeg audio decode -> RMS candidate scoring
-     -> FFmpeg MP4 rendering and thumbnails
-     -> local storage -> preview / download / ZIP
-```
+This is a private single-user preview, not a public multi-tenant SaaS. Keep Tailscale access limited. Tokens live in server environment only and are not returned by the status API. Downloaded/uploaded videos are parsed by third-party media tooling, so treat sources carefully. Uploaded files are limited to 2 GB and source duration to 8 hours. Media jobs use a single-process worker and publishing uses a separate worker; do not start Uvicorn with multiple workers. `clipforge_data` is a persistent Docker volume. AI predictions, caption timing and visual framing require human review before posting.
 
 ## Roadmap
 
-1. Speech-to-text, sentence-aware clip boundaries and optional transcript captions.
-2. Semantic highlight scoring (hook, reaction, punchline, audience engagement) alongside loudness.
-3. Automatic speaker framing, scene-aware vertical crop, logo and subtitle presets.
-4. Authenticated users, resumable jobs, durable distributed queue, storage quotas and retention.
-5. Optional authorized publishing integrations for YouTube Shorts, TikTok, Instagram Reels.
+1. AI scene segmentation, sentence-aware trims, speaker/face tracking, animated captions and brand presets.
+2. Native OAuth account connection, account switching, token refresh UI and per-platform upload status verification.
+3. Publishing queues, drafts, approval workflows and optional scheduled posting **with explicit creator authorization**.
+4. Durable distributed queues, media retention policies, storage quotas and user authentication.
 
-## License
-
-MIT. See [LICENSE](LICENSE).
+MIT license; see [LICENSE](LICENSE).

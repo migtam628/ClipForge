@@ -1,7 +1,5 @@
-# Alternative to compose.yaml: ClipForge and a private Tailscale sidecar.
-# Start: docker compose -f compose.tailscale.yaml up --build -d
+# Alternative to compose.yaml: private ClipForge Tailnet device and optional AI sidecar.
 name: clipforge-tailnet
-
 services:
   tailscale:
     image: tailscale/tailscale:stable
@@ -22,18 +20,36 @@ services:
 
   clipforge:
     build: .
-    # Same network namespace; ClipForge's port is never published by Docker.
     network_mode: service:tailscale
     depends_on:
       - tailscale
     environment:
       CLIPFORGE_DATA_DIR: /data
+      CLIPFORGE_OLLAMA_URL: ${CLIPFORGE_OLLAMA_URL:-http://ollama:11434}
+      CLIPFORGE_AI_MODEL: ${CLIPFORGE_AI_MODEL:-llama3.2:3b}
+      CLIPFORGE_WHISPER_MODEL: ${CLIPFORGE_WHISPER_MODEL:-base}
+      CLIPFORGE_YOUTUBE_CLIENT_ID: ${CLIPFORGE_YOUTUBE_CLIENT_ID:-}
+      CLIPFORGE_YOUTUBE_CLIENT_SECRET: ${CLIPFORGE_YOUTUBE_CLIENT_SECRET:-}
+      CLIPFORGE_YOUTUBE_REFRESH_TOKEN: ${CLIPFORGE_YOUTUBE_REFRESH_TOKEN:-}
+      CLIPFORGE_INSTAGRAM_TOKEN: ${CLIPFORGE_INSTAGRAM_TOKEN:-}
+      CLIPFORGE_INSTAGRAM_USER_ID: ${CLIPFORGE_INSTAGRAM_USER_ID:-}
+      CLIPFORGE_FACEBOOK_PAGE_ACCESS_TOKEN: ${CLIPFORGE_FACEBOOK_PAGE_ACCESS_TOKEN:-}
+      CLIPFORGE_TIKTOK_ACCESS_TOKEN: ${CLIPFORGE_TIKTOK_ACCESS_TOKEN:-}
+      CLIPFORGE_META_API_VERSION: ${CLIPFORGE_META_API_VERSION:-v24.0}
     volumes:
       - clipforge_data:/data
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ai]
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
 volumes:
   tailscale_state:
   clipforge_data:
+  ollama_models:

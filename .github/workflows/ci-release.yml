@@ -36,6 +36,29 @@ jobs:
       - name: Unit and end-to-end media tests
         run: pytest -q
 
+  docker-smoke:
+    name: Docker image and API smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image with FFmpeg and Whisper
+        run: docker build -t clipforge:ci .
+      - name: Launch container
+        run: docker run -d --name clipforge-smoke -p 127.0.0.1:8765:8765 clipforge:ci
+      - name: Check running API
+        run: |
+          set -euo pipefail
+          for n in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/api/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs clipforge-smoke
+          exit 1
+      - name: Stop container
+        if: always()
+        run: docker rm -f clipforge-smoke || true
+
   package:
     name: Build package
     needs: test
@@ -56,7 +79,7 @@ jobs:
   prerelease:
     name: Publish tested prerelease
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [test, package]
+    needs: [test, package, docker-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -75,7 +98,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="v0.1.0-preview.${RUN_NUMBER}"
+          tag="v0.2.0-preview.${RUN_NUMBER}"
           gh release create "$tag" dist/* \
             --target "$SOURCE_SHA" \
             --title "ClipForge $tag" \
