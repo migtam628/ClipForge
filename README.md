@@ -12,6 +12,57 @@
 - **Creator review**: browse job progress, previews, thumbnails, captions/effects badges, and AI-generated titles, then download MP4 or bulk ZIP.
 - **Social publishing**: after reviewing each clip, explicitly authorize transfer to connected YouTube Shorts, Instagram Reels and Facebook Page Reels, or send a draft to the TikTok inbox for final posting. Platforms may restrict access or require developer approval.
 
+## YouTube account verification on authorized imports
+
+Sometimes yt-dlp reports **"Sign in to confirm you're not a bot"** when
+YouTube requires an authenticated browser session. This is a YouTube request
+block, not an AI, FFmpeg or hardware problem. Repeating it automatically
+will usually not help. **Only download and edit videos when you have the
+necessary permissions and YouTube permits the download.**
+
+**Safest approach for your own videos:** obtain the original MP4 from
+YouTube Studio (or your original camera/source), then use Studio → Upload file.
+
+For a video you have permission to retrieve through yt-dlp, optional
+authentication is supported using a YouTube-only Netscape `cookies.txt` file.
+The official yt-dlp FAQ and Extractors wiki describe exporting these cookies.
+Some accounts may still be blocked, and cookies may become invalid or rotate.
+
+1. Export **only `youtube.com` cookies** in Netscape format on your own
+   trusted computer, from a session allowed to access the video. Do not
+   export all browser sessions. Do not share this file with ChatGPT,
+   GitHub, email, or anybody else: it may grant access to your account.
+2. Put the file at `~/ClipForge/private-auth/youtube.txt` on the Ubuntu
+   Docker host (for example using `scp` over your tailnet). The
+   `private-auth` folder is excluded from Git **and** Docker build context.
+3. On Ubuntu, ensure group 10001 (the ClipForge container user) can read it:
+
+```bash
+cd ~/ClipForge
+mkdir -p private-auth
+# Copy your YouTube-only Netscape cookie export into private-auth/youtube.txt
+sudo chgrp 10001 private-auth private-auth/youtube.txt
+chmod 750 private-auth
+chmod 640 private-auth/youtube.txt
+docker compose --profile ai up -d --force-recreate clipforge
+docker compose --profile ai exec clipforge python -c \
+  'from clipforge.import_auth import youtube_cookie_status; print(youtube_cookie_status())'
+```
+
+4. Confirm **Settings → YouTube URL imports** says the file is ready.
+   Return to **Activity → Resume job** to retry the failed URL download.
+
+ClipForge mounts `./private-auth` into its container **read-only**, copies
+only YouTube cookie entries into a temporary writable file per import,
+and deletes it after the attempt. It never includes cookies in the
+job JSON, API response, Git history or Docker image. The folder can be
+left empty when you prefer direct video uploads. When the login expires,
+replace the host file yourself. Do not expose your ClipForge instance
+outside trusted Tailscale access.
+
+See [yt-dlp cookie instructions](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp)
+and [YouTube Extractors guidance](https://github.com/yt-dlp/yt-dlp/wiki/Extractors).
+
 ## Workspace navigation
 
 ClipForge now has **five distinct page URLs** with real navigation:
