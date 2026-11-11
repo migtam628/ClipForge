@@ -24,10 +24,20 @@ $('create-button').addEventListener('click', createJob);
 for (const button of document.querySelectorAll('[data-refresh]')) {
   button.addEventListener('click', refresh);
 }
-$('file').addEventListener('change', () => {
-  const file = $('file').files[0];
-  if (file) document.querySelector('.drop-zone strong').textContent = file.name;
-});
+function chosenVideoFiles() {
+  const folderFiles = $('folder').files.length ? [...$('folder').files] : [...$('file').files];
+  return folderFiles.filter((f) => /\.(mp4|mov|mkv|webm)$/i.test(f.name));
+}
+function updateUploadSelection() {
+  const sources = chosenVideoFiles();
+  document.querySelector('.drop-zone strong').textContent =
+    sources.length ? sources.length + ' video source' + (sources.length === 1 ? '' : 's') + ' selected' : 'Choose one or many videos';
+  $('batch-selection-hint').textContent =
+    sources.length > 1 ? sources.length + ' videos selected. ClipForge processes them sequentially, one checkpointed job per source.' :
+    'Videos are queued one at a time for CPU-friendly processing. Each keeps its own retry checkpoints.';
+}
+$('file').addEventListener('change', () => { $('folder').value = ''; updateUploadSelection(); });
+$('folder').addEventListener('change', () => { $('file').value = ''; updateUploadSelection(); });
 $('max-clips').addEventListener('change', updateCustomCount);
 $('narration').addEventListener('change', updateNarrationNotice);
 $('settings-form').addEventListener('submit', savePreferences);
@@ -98,28 +108,49 @@ async function createJob() {
     return notify('Choose between 1 and 100 clips.');
   }
   let request;
+  let endpoint;
   if (activeTab === 'url') {
-    const url = $('url').value.trim();
-    if (!url) return notify('Enter a source video URL.');
+    const multiline = $('url-list').value.trim();
+    const urls = [...new Set((multiline ? multiline.split(/\r?\n/) : [$('url').value])
+      .map((x) => x.trim()).filter(Boolean))];
+    if (!urls.length) return notify('Enter a video URL or multiple authorized URLs.');
+    if (urls.length > 100) return notify('Maximum 100 source URLs in a batch.');
+    if (options.narration === 'narrated' && urls.length > 1 &&
+        !confirm('Narrating all ' + urls.length + ' sources can incur ElevenLabs charges. Approve this batch?')) return;
+    endpoint = urls.length > 1 ? '/api/jobs/batch' : '/api/jobs';
     request = {
-      headers: {'Content-Type': 'application/json'},
-      method: 'POST', body: JSON.stringify({...options, url})
+      headers: {'Content-Type': 'application/json'}, method: 'POST',
+      body: JSON.stringify(urls.length > 1
+        ? {...options, urls, voice_spend_approved: options.narration === 'narrated'}
+        : {...options, url: urls[0]})
     };
   } else {
-    const file = $('file').files[0];
-    if (!file) return notify('Select a video file to upload.');
+    const files = chosenVideoFiles();
+    if (!files.length) return notify('Select MP4, MOV, MKV or WEBM files first.');
+    if (files.length > 100) return notify('Maximum 100 source videos in a batch.');
+    if (files.some((file) => file.size > 2 * 1024 ** 3) ||
+        files.reduce((sum, file) => sum + file.size, 0) > 8 * 1024 ** 3)
+      return notify('Each file must be at most 2 GB; batch total at most 8 GB.');
+    if (options.narration === 'narrated' && files.length > 1 &&
+        !confirm('Narrating all ' + files.length + ' sources can incur ElevenLabs charges. Approve this batch?')) return;
     const data = new FormData();
     for (const [k, v] of Object.entries(options)) data.set(k, String(v));
-    data.set('file', file);
+    endpoint = files.length > 1 ? '/api/uploads/batch' : '/api/uploads';
+    if (files.length > 1) {
+      data.set('voice_spend_approved', String(options.narration === 'narrated'));
+      files.forEach((file) => data.append('files', file, file.name));
+    } else data.set('file', files[0]);
     request = {method: 'POST', body: data};
   }
   $('create-button').disabled = true;
   try {
-    const response = await fetch(activeTab === 'url' ? '/api/jobs' : '/api/uploads', request);
+    const response = await fetch(endpoint, request);
     const result = await response.json();
     if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not queue video');
     $('url').value = '';
+    $('url-list').value = '';
     $('file').value = '';
+    $('folder').value = '';
     $('rights').checked = false;
     location.assign('/activity');
   } catch (err) {
@@ -291,6 +322,8 @@ function card(job, mode = currentPage) {
   meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
   head.append(meta, el('span', `job-status ${job.status === 'failed' ? 'failed' : ''}`, job.status));
   wrapper.append(head);
+  if (job.batch_id)
+    wrapper.append(el('span', 'clip-tag', 'Batch source ' + job.batch_index + '/' + job.batch_total));
   if (job.status === 'failed') wrapper.append(el('p', 'error', job.error || 'This job failed.'));
   if (job.status !== 'completed' && job.status !== 'failed') {
     const bar = el('div', 'progress-bg');
@@ -517,6 +550,26 @@ async function refresh() {
         const item = el('div', 'stat-item');
         item.append(el('strong', '', String(value)), el('span', '', label));
         parent.append(item);
+      }
+    }
+    if (currentPage === 'activity') {
+      const batches = new Map();
+      for (const job of jobs) {
+        if (!job.batch_id) continue;
+        if (!batches.has(job.batch_id))
+          batches.set(job.batch_id, {total: job.batch_total || 0, completed: 0, failed: 0});
+        const record = batches.get(job.batch_id);
+        if (job.status === 'completed') record.completed++;
+        if (job.status === 'failed') record.failed++;
+      }
+      const group = $('activity-batches');
+      group.replaceChildren();
+      for (const [id, record] of batches.entries()) {
+        const item = el('div', 'batch-summary-item');
+        item.append(el('strong', '', 'Batch ' + id.slice(0, 8)),
+                    el('span', '', record.completed + '/' + record.total + ' completed · ' +
+                       record.failed + ' need attention'));
+        group.append(item);
       }
     }
     if (currentPage === 'publishing') renderPlatforms();
