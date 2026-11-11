@@ -37,7 +37,7 @@ jobs:
       - name: Lint
         run: ruff check .
       - name: Unit and end-to-end media tests
-        run: pytest -q
+        run: pytest -vv --maxfail=1 --timeout=90
 
   docker-smoke:
     name: Docker image and API smoke test

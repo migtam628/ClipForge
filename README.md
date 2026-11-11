@@ -22,6 +22,8 @@ ClipForge now has **five distinct page URLs** with real navigation:
 - `/activity` - processing queue, stage progress, error diagnostics and Resume job.
 - `/settings` - persistent non-secret Studio defaults, AI/voice status, publishing connections and storage/security guidance.
 
+Rendering defaults to two FFmpeg encoder threads to reduce memory/CPU contention with Ollama on small servers (adjust `CLIPFORGE_FFMPEG_THREADS` if needed).
+
 Settings save to the persistent `clipforge_data` Docker volume. New jobs inherit
 the current Studio defaults; existing jobs and previously generated clips are not changed.
 API limits remain 1-100 clips, with 1/3/5 among the new visual presets.
@@ -167,6 +169,7 @@ Optional settings in .env (restart/recreate ClipForge after editing):
 CLIPFORGE_AI_BATCH_SIZE=4
 CLIPFORGE_AI_TIMEOUT=600
 CLIPFORGE_AI_RETRIES=3
+CLIPFORGE_FFMPEG_THREADS=2
 ```
 
 Run your existing host-Tailscale deployment with

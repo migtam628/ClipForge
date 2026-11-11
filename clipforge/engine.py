@@ -6,6 +6,7 @@ import array
 import ipaddress
 import json
 import math
+import os
 import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -213,8 +214,13 @@ def render_clip(
         args += ["-filter_complex", audio_filter, "-map", "[aout]"]
     else:
         args += ["-map", "0:a:0?"]
+    try:
+        threads = max(1, min(8, int(os.environ.get("CLIPFORGE_FFMPEG_THREADS", "2"))))
+    except ValueError:
+        threads = 2
     args += [
-        "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf",
+        "-vf", vf, "-c:v", "libx264", "-threads", str(threads),
+        "-preset", "veryfast", "-crf",
         "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
         "-movflags", "+faststart", str(dest),
     ]
