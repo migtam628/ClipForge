@@ -33,7 +33,9 @@ jobs:
       - name: Install package with test tools
         run: python -m pip install -e '.[dev]'
       - name: Validate browser JavaScript
-        run: node --check clipforge/static/app.js
+        run: |
+          node --check clipforge/static/app.js
+          node --check clipforge/static/analytics.js
       - name: Lint
         run: ruff check .
       - name: Unit and end-to-end media tests
