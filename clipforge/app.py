@@ -43,6 +43,7 @@ from clipforge.narration import (
 )
 from clipforge.publishing import platform_status, publish
 from clipforge.recovery import load_json, recover_source, save_json
+from clipforge.smart_frame import plan_face_tracking
 
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -74,9 +75,9 @@ class Options(BaseModel):
     max_clips: int = Field(default=25, ge=1, le=100)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     selection_mode: Literal["ai", "energy"] = "energy"
-    caption_style: Literal["none", "classic", "bold", "neon"] = "none"
+    caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop"] = "pad"
+    framing: Literal["pad", "crop", "smart", "blur"] = "pad"
     hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
@@ -95,8 +96,8 @@ class ClipEditRequest(BaseModel):
     duration: float = Field(ge=3, le=120)
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop"] = "crop"
-    caption_style: Literal["none", "classic", "bold", "neon"] = "bold"
+    framing: Literal["pad", "crop", "smart", "blur"] = "crop"
+    caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
     voiceover: bool = False
@@ -320,11 +321,21 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 # A crash during FFmpeg must not leave a supposedly valid clip.
                 partial = output / f".clip-{index:03d}.partial.mp4"
                 partial.unlink(missing_ok=True)
+                smart_track = None
+                if opts.framing == "smart":
+                    tracking_file = output / f"clip-{index:03d}-tracking.txt"
+                    if plan_face_tracking(
+                        source_path, candidate["start"], candidate["duration"],
+                        tracking_file, *({"9:16": (720, 1280), "16:9": (1280, 720),
+                                          "1:1": (720, 720)}[opts.aspect_ratio]),
+                    ):
+                        smart_track = tracking_file
                 render_clip(
                     source_path, partial, candidate["start"], candidate["duration"],
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
                     framing=opts.framing, voiceover=voiceover,
                     has_source_audio=info["has_audio"], hook=hook_file,
+                    smart_track=smart_track,
                 )
                 os.replace(partial, destination)
                 try:
@@ -338,6 +349,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "script": script, "voiceover_added": voiceover is not None,
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
+                    "face_tracking": smart_track is not None,
                     **candidate,
                 })
             _patch(folder, clips=clips, progress=max(
@@ -428,8 +440,8 @@ def get_settings():
     saved = load_json(DATA_DIR / "settings.json")
     try:
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
-            selection_mode="ai", caption_style="bold", effect="pop",
-            framing="crop", max_clips=5, hook_style="headline",
+            selection_mode="ai", caption_style="karaoke", effect="pop",
+            framing="smart", max_clips=5, hook_style="headline",
         )
     except ValueError:
         defaults = Options()
@@ -606,10 +618,19 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             if write_hook(edit.title, edit.duration, ass):
                 hook_file = ass
 
+        smart_track = None
+        if edit.framing == "smart":
+            track = output / f"{base}-tracking.txt"
+            dimensions = {
+                "9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720),
+            }[job["options"]["aspect_ratio"]]
+            if plan_face_tracking(source, edit.start, edit.duration, track, *dimensions):
+                smart_track = track
         render_clip(
             source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
+            smart_track=smart_track,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -639,6 +660,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",
                 voiceover_added=voiceover is not None,
+                face_tracking=smart_track is not None,
                 narration="narrated" if voiceover else ("script" if edit.script.strip() else "none"),
                 script=edit.script.strip() or None,
                 revision_count=version, revision_history=history,

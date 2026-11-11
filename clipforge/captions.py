@@ -7,6 +7,8 @@ STYLES = {
     "classic": ("&H00FFFFFF", 54, 2),
     "bold": ("&H0000FFFF", 64, 4),
     "neon": ("&H00FF66FF", 64, 4),
+    "karaoke": ("&H0000FFFF", 62, 4),
+    "pop": ("&H00FFFFFF", 67, 4),
 }
 
 
@@ -50,7 +52,37 @@ def write_captions(transcript: list[dict], start: float, duration: float,
         end = min(duration, max(group[-1]["end"] - start, begin + 0.2))
         if end <= begin:
             continue
-        label = " ".join(_safe(word["text"]) for word in group).upper()
+        if style == "karaoke":
+            # Align the progressive highlight to Whisper word boundaries;
+            # subtitle duration and ASS tags are bounded to clip timestamps.
+            parts = []
+            cursor = group[0]["start"]
+            for word in group:
+                gap = max(0, word["start"] - cursor)
+                if gap > 0.02:
+                    parts.append(f"{{\\k{max(1, round(gap * 100))}}}")
+                span = max(0.01, min(word["end"], start + duration)
+                           - max(word["start"], start))
+                parts.append(
+                    f"{{\\kf{max(1, round(span * 100))}}}{_safe(word['text']).upper()} "
+                )
+                cursor = word["end"]
+            label = "".join(parts).strip()
+        elif style == "pop":
+            for word in group:
+                word_begin = max(0, word["start"] - start)
+                word_end = min(duration, max(word["end"] - start, word_begin + 0.12))
+                if word_end <= word_begin:
+                    continue
+                label = ("{\\fscx88\\fscy88\\t(0,140,\\fscx108\\fscy108)}"
+                         + _safe(word["text"]).upper())
+                lines.append(
+                    f"Dialogue: 0,{_ass_time(word_begin)},{_ass_time(word_end)},"
+                    f"Main,,0,0,0,,{label}"
+                )
+            continue
+        else:
+            label = " ".join(_safe(word["text"]) for word in group).upper()
         lines.append(f"Dialogue: 0,{_ass_time(begin)},{_ass_time(end)},Main,,0,0,0,,{label}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True

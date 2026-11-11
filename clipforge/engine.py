@@ -161,7 +161,7 @@ def render_clip(
     source: Path, dest: Path, start: float, length: float, ratio: str,
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
     voiceover: Path | None = None, has_source_audio: bool = True,
-    hook: Path | None = None,
+    hook: Path | None = None, smart_track: Path | None = None,
 ) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
@@ -169,6 +169,20 @@ def render_clip(
         vf = (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},setsar=1"
+        )
+    elif framing == "smart":
+        vf = f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+        if smart_track is not None and smart_track.is_file():
+            safe_track = str(smart_track).replace("\\", "\\\\").replace(":", "\\:")
+            vf += f"sendcmd=f={safe_track},"
+        vf += f"crop@smart={w}:{h},setsar=1"
+    elif framing == "blur":
+        vf = (
+            "split[bg][fg];"
+            f"[bg]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},gblur=sigma=12[back];"
+            f"[fg]scale={w}:{h}:force_original_aspect_ratio=decrease[front];"
+            "[back][front]overlay=(W-w)/2:(H-h)/2,setsar=1"
         )
     elif framing == "pad":
         vf = (

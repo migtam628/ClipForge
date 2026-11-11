@@ -189,10 +189,12 @@ function buildClipEditor(job, clip) {
   ], clip.effect || job.options.effect);
 
   const framing = dropdown('Framing', [
-    ['crop', 'Crop to fill'], ['pad', 'Keep full frame']
+    ['smart', 'Smart · follow faces'], ['blur', 'Blurred background'],
+    ['crop', 'Centered crop'], ['pad', 'Keep full frame']
   ], clip.framing || job.options.framing);
 
   const captions = dropdown('Captions', [
+    ['karaoke', 'Word-aligned karaoke'], ['pop', 'Animated pop words'],
     ['bold', 'Bold yellow'], ['classic', 'Classic white'],
     ['neon', 'Neon pink'], ['none', 'No captions']
   ], clip.caption_style || (clip.captions_added ? job.options.caption_style : 'none'));
@@ -325,6 +327,8 @@ function card(job, mode = currentPage) {
       if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
       if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
       if (clip.hook_style === 'headline') description.append(el('span', 'clip-tag', '✦ Opening hook'));
+      if (clip.face_tracking) description.append(el('span', 'clip-tag', '◉ Face-aware crop'));
+      else if (clip.framing === 'smart') description.append(el('span', 'clip-tag', 'Centered fallback'));
       if (clip.revision_count) description.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
       if (clip.revision_state === 'queued' || clip.revision_state === 'rendering')
         description.append(el('p', 'editor-progress', '⌁ Rendering your edited version…'));

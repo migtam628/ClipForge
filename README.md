@@ -2,7 +2,34 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.3.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.5.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+
+## Professional social-video reframing and word-aligned captions (v0.5)
+
+**Studio → Vertical framing** now supports smart face-aware crop and blurred
+background in addition to centered crop and padding. Smart tracking samples at
+most 32 frames per clip with OpenCV's CPU Haar face detector, smooths the target
+across samples and instructs FFmpeg to move the crop. If no face is detected,
+it safely falls back to centered framing. This is basic face-aware tracking,
+not identity recognition, lip-sync speaker attribution, or guaranteed tracking
+of multiple speakers. Raw face images/biometric templates are not retained.
+
+**Automatic captions** now include two animated styles:
+
+- **Karaoke** uses per-word timestamps from faster-whisper to progressively
+  highlight words in four-word phrases.
+- **Pop** shows individual words with a brief scale-in animation.
+
+Both also work in the clip revision editor. Narration-script captions use
+estimated timing, **not** provider-exact alignment. On resource-limited
+hardware, start with one 15-second clip and compare smart crop and blurred
+background; automatic face tracking may increase processing time. The
+server's output remains review-required before publishing.
+
+OpenCV is installed in the Docker AI image via the headless Python package,
+which does not require an X11 desktop. The `smart` and `blur` options do
+not use cloud GPU services, send face data to external providers, or alter
+YouTube authentication or networking.
 
 ## What it does
 
