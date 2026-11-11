@@ -25,6 +25,7 @@ services:
       - tailscale
     environment:
       CLIPFORGE_DATA_DIR: /data
+      CLIPFORGE_YOUTUBE_COOKIES_FILE: ${CLIPFORGE_YOUTUBE_COOKIES_FILE:-/run/clipforge-auth/youtube.txt}
       CLIPFORGE_OLLAMA_URL: ${CLIPFORGE_OLLAMA_URL:-http://ollama:11434}
       CLIPFORGE_AI_MODEL: ${CLIPFORGE_AI_MODEL:-llama3.2:3b}
       CLIPFORGE_AI_BATCH_SIZE: ${CLIPFORGE_AI_BATCH_SIZE:-4}

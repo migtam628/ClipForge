@@ -31,7 +31,7 @@ def _is_youtube(url: str) -> bool:
 def _youtube_cookie_rows() -> list[str] | None:
     path = Path(os.environ.get(COOKIE_ENV) or DEFAULT_PATH)
     if not path.exists():
-        if os.environ.get(COOKIE_ENV):
+        if os.environ.get(COOKIE_ENV) and path != Path(DEFAULT_PATH):
             raise RuntimeError(
                 "YouTube cookie file was configured but is missing. "
                 "Check the private host-file mount and file permissions."
