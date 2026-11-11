@@ -43,6 +43,7 @@ from clipforge.narration import (
 )
 from clipforge.publishing import platform_status, publish
 from clipforge.recovery import load_json, recover_source, save_json
+from clipforge.smart_frame import plan_face_tracking
 
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,7 +77,7 @@ class Options(BaseModel):
     selection_mode: Literal["ai", "energy"] = "energy"
     caption_style: Literal["none", "classic", "bold", "neon"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop"] = "pad"
+    framing: Literal["pad", "crop", "smart", "blur"] = "pad"
     hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
@@ -95,7 +96,7 @@ class ClipEditRequest(BaseModel):
     duration: float = Field(ge=3, le=120)
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop"] = "crop"
+    framing: Literal["pad", "crop", "smart", "blur"] = "crop"
     caption_style: Literal["none", "classic", "bold", "neon"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
@@ -320,11 +321,21 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 # A crash during FFmpeg must not leave a supposedly valid clip.
                 partial = output / f".clip-{index:03d}.partial.mp4"
                 partial.unlink(missing_ok=True)
+                smart_track = None
+                if opts.framing == "smart":
+                    tracking_file = output / f"clip-{index:03d}-tracking.txt"
+                    if plan_face_tracking(
+                        source_path, candidate["start"], candidate["duration"],
+                        tracking_file, *({"9:16": (720, 1280), "16:9": (1280, 720),
+                                          "1:1": (720, 720)}[opts.aspect_ratio]),
+                    ):
+                        smart_track = tracking_file
                 render_clip(
                     source_path, partial, candidate["start"], candidate["duration"],
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
                     framing=opts.framing, voiceover=voiceover,
                     has_source_audio=info["has_audio"], hook=hook_file,
+                    smart_track=smart_track,
                 )
                 os.replace(partial, destination)
                 try:
@@ -606,10 +617,19 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             if write_hook(edit.title, edit.duration, ass):
                 hook_file = ass
 
+        smart_track = None
+        if edit.framing == "smart":
+            track = output / f"{base}-tracking.txt"
+            dimensions = {
+                "9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720),
+            }[job["options"]["aspect_ratio"]]
+            if plan_face_tracking(source, edit.start, edit.duration, track, *dimensions):
+                smart_track = track
         render_clip(
             source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
+            smart_track=smart_track,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
