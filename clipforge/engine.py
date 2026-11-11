@@ -157,6 +157,7 @@ def select_highlights(
 def render_clip(
     source: Path, dest: Path, start: float, length: float, ratio: str,
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
+    voiceover: Path | None = None, has_source_audio: bool = True,
 ) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
@@ -186,19 +187,39 @@ def render_clip(
         # Caption paths are server-owned UUID locations, never user-provided paths.
         safe_path = str(captions).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_path
-    subprocess.run(
-        [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
-            str(start), "-i", str(source), "-t", str(length), "-map", "0:v:0", "-map",
-            "0:a:0?", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf",
-            "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart", str(dest),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=True,
-    )
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
+        str(start), "-i", str(source),
+    ]
+    if voiceover is not None:
+        args.extend(["-i", str(voiceover)])
+    args += ["-t", str(length), "-map", "0:v:0"]
+    if voiceover is not None:
+        # Keep original audio audible but quieter than the commentary track.
+        # Both audio paths are padded/trimmed to the exact output duration.
+        if has_source_audio:
+            audio_filter = (
+                f"[0:a:0]volume=0.18,apad,atrim=duration={length},"
+                "asetpts=PTS-STARTPTS[bed];"
+                f"[1:a:0]apad,atrim=duration={length},asetpts=PTS-STARTPTS[voice];"
+                "[bed][voice]amix=inputs=2:duration=longest:"
+                "dropout_transition=0:normalize=0[aout]"
+            )
+        else:
+            audio_filter = (
+                f"[1:a:0]apad,atrim=duration={length},"
+                "asetpts=PTS-STARTPTS[aout]"
+            )
+        args += ["-filter_complex", audio_filter, "-map", "[aout]"]
+    else:
+        args += ["-map", "0:a:0?"]
+    args += [
+        "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf",
+        "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", str(dest),
+    ]
+    subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+
 
 
 def render_thumbnail(clip: Path, dest: Path) -> None:
