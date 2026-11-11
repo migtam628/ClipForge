@@ -12,6 +12,43 @@
 - **Creator review**: browse job progress, previews, thumbnails, captions/effects badges, and AI-generated titles, then download MP4 or bulk ZIP.
 - **Social publishing**: after reviewing each clip, explicitly authorize transfer to connected YouTube Shorts, Instagram Reels and Facebook Page Reels, or send a draft to the TikTok inbox for final posting. Platforms may restrict access or require developer approval.
 
+## Media download network routing
+
+Some Docker hosts resolve YouTube to both IPv4 and IPv6 but have no usable
+IPv6 route. The host can successfully connect with `curl -4`, while a
+YouTube import fails with `[Errno 101] Network is unreachable`.
+
+ClipForge now defaults to IPv4 for all yt-dlp media imports using
+`source_address="0.0.0.0"` (the Python equivalent of `yt-dlp -4`).
+This only affects outbound downloader connections; it does not change
+Ubuntu, Docker bridge networking, Tailscale, or Ollama.
+
+Use `CLIPFORGE_DOWNLOAD_IP_FAMILY=ipv4` in your server `.env` (default).
+For a different host with functioning IPv6, set the option to `ipv6`.
+Set `auto` to use system address-family selection. Change requires a
+ClipForge container recreation. Never disable TLS verification or delete
+your private YouTube cookie file for a routing issue.
+
+To check connectivity inside the container without downloading any video:
+
+```bash
+cd ~/ClipForge
+docker compose --profile ai exec -T clipforge python - <<'PY'
+import socket
+for host in ("www.youtube.com", "www.google.com"):
+    addresses = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+        connection.settimeout(10)
+        connection.connect(addresses[0][4])
+    print(host, "IPv4: connected")
+PY
+```
+
+After deploying this patch, select **Activity → Resume job** on the failed
+URL import to reuse any existing media, transcripts, and completed clips.
+This doesn't guarantee access when YouTube is blocking a session or no
+playable format is available.
+
 ## YouTube format availability and player challenges
 
 YouTube may return `Requested format is not available` either because a

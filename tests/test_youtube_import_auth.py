@@ -98,6 +98,7 @@ def test_download_uses_temp_cookies_for_youtube_only(monkeypatch, tmp_path):
     monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeDownloader)
     assert download_video("https://www.youtube.com/watch?v=abc", tmp_path).exists()
     assert calls[0].get("cookiefile")
+    assert calls[0]["source_address"] == "0.0.0.0"
     # Prefer source quality <=1080p, but don't fail when the only playable
     # video track exceeds that resolution.
     selector = calls[0]["format"]
@@ -108,6 +109,7 @@ def test_download_uses_temp_cookies_for_youtube_only(monkeypatch, tmp_path):
     (tmp_path / "source.mp4").unlink()
     assert download_video("https://vimeo.com/123", tmp_path).exists()
     assert not calls[1].get("cookiefile")
+    assert calls[1]["source_address"] == "0.0.0.0"
 
 
 def test_youtube_verification_failure_has_recovery_instructions(monkeypatch, tmp_path):
@@ -164,3 +166,67 @@ def test_unavailable_formats_explain_missing_media_and_recovery(monkeypatch, tmp
         download_video("https://www.youtube.com/watch?v=Y7kBmcWKLxg", tmp_path)
     assert "Deno and yt-dlp-ejs" in str(exc.value)
     assert "Activity" in str(exc.value)
+
+
+def test_download_ip_family_is_configurable(monkeypatch, tmp_path):
+    import yt_dlp
+
+    monkeypatch.delenv(import_auth.COOKIE_ENV, raising=False)
+    monkeypatch.setattr(import_auth, "DEFAULT_PATH", str(tmp_path / "missing.txt"))
+    choices = []
+
+    class FakeDownloader:
+        def __init__(self, options):
+            choices.append(dict(options))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def download(self, urls):
+            assert urls == ["https://vimeo.com/123"]
+            (tmp_path / "source.mp4").write_bytes(b"video")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeDownloader)
+    for preference, expected in (
+        ("ipv4", "0.0.0.0"), ("ipv6", "::"), ("auto", None)
+    ):
+        monkeypatch.setenv("CLIPFORGE_DOWNLOAD_IP_FAMILY", preference)
+        assert download_video("https://vimeo.com/123", tmp_path).is_file()
+        assert choices[-1].get("source_address") == expected
+        (tmp_path / "source.mp4").unlink()
+
+    monkeypatch.setenv("CLIPFORGE_DOWNLOAD_IP_FAMILY", "invalid")
+    with pytest.raises(ValueError, match="CLIPFORGE_DOWNLOAD_IP_FAMILY"):
+        download_video("https://vimeo.com/123", tmp_path)
+    assert len(choices) == 3
+
+
+def test_unreachable_network_error_is_actionable(monkeypatch, tmp_path):
+    import yt_dlp
+
+    monkeypatch.setenv("CLIPFORGE_DOWNLOAD_IP_FAMILY", "ipv4")
+    monkeypatch.delenv(import_auth.COOKIE_ENV, raising=False)
+    monkeypatch.setattr(import_auth, "DEFAULT_PATH", str(tmp_path / "missing.txt"))
+
+    class Offline:
+        def __init__(self, options):
+            assert options["source_address"] == "0.0.0.0"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def download(self, urls):
+            raise yt_dlp.utils.DownloadError(
+                "HTTPSConnection(host='www.youtube.com'): [Errno 101] Network is unreachable"
+            )
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", Offline)
+    with pytest.raises(RuntimeError, match="configured to use ipv4") as error:
+        download_video("https://www.youtube.com/watch?v=test", tmp_path)
+    assert "Resume job" in str(error.value)
