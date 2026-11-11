@@ -481,7 +481,7 @@ function card(job, mode = currentPage) {
           scheduledTime.type = 'datetime-local';
           scheduledTime.required = true;
           scheduledTime.setAttribute('aria-label', 'Scheduled local date and time');
-          const guidance = el('p', 'helper-note',
+          const scheduleGuidance = el('p', 'helper-note',
             'Approved uploads run at approximately the selected local time. TikTok receives an inbox draft, not a public post. Already-published files are not replaced by later edits.');
 
           const presetSelect = el('select');
@@ -567,7 +567,7 @@ function card(job, mode = currentPage) {
             el('label', '', 'Description'), scheduledDescription,
             el('label', '', 'YouTube visibility'), scheduledVisibility,
             el('label', '', 'Scheduled time (your local timezone)'), scheduledTime,
-            guidance, savePreset, scheduleSubmit,
+            scheduleGuidance, savePreset, scheduleSubmit,
           );
           scheduleButton.addEventListener('click', () => {
             schedulePanel.hidden = !schedulePanel.hidden;
