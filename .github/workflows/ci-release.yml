@@ -23,6 +23,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      - name: Validate Docker Compose (local and Tailscale)
+        run: |
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.tailscale.yaml config --quiet
       - name: Install FFmpeg and FFprobe
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install package with test tools

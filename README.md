@@ -39,6 +39,54 @@ docker compose up --build -d
 
 Open **http://127.0.0.1:8765**. The Docker Compose sample intentionally binds to **localhost only** and stores job files in a persistent Docker named volume (`clipforge_data`).
 
+### Access ClipForge through Tailscale (private HTTPS)
+
+Choose **one** of these deployment methods. ClipForge has no built-in login yet; keep access restricted to trusted tailnet users and devices.
+
+**Option A — Existing Tailscale host (recommended when Tailscale is installed on the Docker machine)**
+
+```bash
+git clone https://github.com/migtam628/ClipForge.git
+cd ClipForge
+docker compose up --build -d
+curl -fsS http://127.0.0.1:8765/api/health
+tailscale serve --bg 8765
+tailscale serve status
+```
+
+On another device connected to your tailnet, open the HTTPS address printed by Tailscale Serve, such as `https://<host>.<tailnet>.ts.net/`. You may first need to enable MagicDNS and HTTPS certificates in Tailscale. The ordinary `compose.yaml` intentionally binds port 8765 **only to 127.0.0.1**; leave it that way. On Linux, Tailscale commands may require `sudo`. To stop sharing, use `tailscale serve --https=443 off`. Background Serve resumes after reboot.
+
+**Option B — Tailscale in Docker (dedicated private ClipForge tailnet node)**
+
+This mode creates a Tailscale device named `clipforge` using the official container and `compose.tailscale.yaml`. No host, LAN, or public ports are published. It uses userspace networking, so no `/dev/net/tun` or additional networking capabilities are required.
+
+1. Create a **non-ephemeral** Tailscale auth key using [Tailscale Keys](https://login.tailscale.com/admin/settings/keys). Do not commit or share the key.
+2. Copy `.env.example` to `.env`, then replace the example key with your own. `.env` is gitignored.
+3. Start the stack:
+
+```bash
+git clone https://github.com/migtam628/ClipForge.git
+cd ClipForge
+cp .env.example .env
+# Edit .env to set TS_AUTHKEY to your own key before continuing.
+docker compose -f compose.tailscale.yaml up --build -d
+docker compose -f compose.tailscale.yaml exec tailscale tailscale status
+docker compose -f compose.tailscale.yaml exec tailscale tailscale serve status
+```
+
+From another device in the same tailnet, visit the private HTTPS URL reported by Serve (normally `https://clipforge.<tailnet>.ts.net/`). The sidecar proxies HTTPS port 443 to ClipForge port 8765 in their shared network namespace. Tailscale may require MagicDNS and HTTPS to be enabled once. Its device identity survives container restarts via the `tailscale_state` named volume. After initial login, you can remove the auth key from `.env`: `TS_AUTH_ONCE=true` reuses saved state.
+
+Diagnostics and shutdown:
+
+```bash
+docker compose -f compose.tailscale.yaml ps
+docker compose -f compose.tailscale.yaml logs --tail=100 clipforge tailscale
+docker compose -f compose.tailscale.yaml exec tailscale tailscale ip -4
+docker compose -f compose.tailscale.yaml exec tailscale tailscale serve status
+docker compose -f compose.tailscale.yaml down
+```
+
+Do **not** run `docker compose down -v` unless you intend to delete both the Tailscale identity and all ClipForge media/job data. The Tailscale-only deployment has its own Compose project and volumes; do not start both modes simultaneously. Tailscale access controls apply, but default rules may permit every tailnet user; restrict TCP 443 to trusted users. Never use Tailscale Funnel with this unauthenticated preview.
 ### Environment
 
 | Variable | Default | Meaning |

@@ -1,0 +1,39 @@
+# Alternative to compose.yaml: ClipForge and a private Tailscale sidecar.
+# Start: docker compose -f compose.tailscale.yaml up --build -d
+name: clipforge-tailnet
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: clipforge
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: clipforge
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  clipforge:
+    build: .
+    # Same network namespace; ClipForge's port is never published by Docker.
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    environment:
+      CLIPFORGE_DATA_DIR: /data
+    volumes:
+      - clipforge_data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  tailscale_state:
+  clipforge_data:
