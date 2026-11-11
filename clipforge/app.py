@@ -11,6 +11,7 @@ import threading
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -33,6 +34,7 @@ from clipforge.engine import (
     validate_url,
 )
 from clipforge.publishing import platform_status, publish
+from clipforge.recovery import load_json, recover_source, save_json
 
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -43,7 +45,19 @@ LOCK = threading.RLock()
 STATIC = Path(__file__).resolve().parent / "static"
 LOGGER = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="ClipForge", version=__version__, docs_url="/api/docs")
+ACTIVE_STATES = {"queued", "downloading", "analyzing", "transcribing", "selecting", "rendering"}
+
+
+@asynccontextmanager
+async def lifespan(_application: FastAPI):
+    """Requeue jobs interrupted by a container restart; failed jobs need approval."""
+    recover_interrupted_jobs()
+    yield
+
+
+app = FastAPI(
+    title="ClipForge", version=__version__, docs_url="/api/docs", lifespan=lifespan,
+)
 app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
 
 
@@ -114,80 +128,184 @@ def _create(kind: str, options: Options, label: str) -> tuple[str, Path]:
         "duration": None,
         "clips": [],
         "publications": [],
+        "source_url": label if kind == "url" else None,
+        "resume_count": 0,
         "options": options.model_dump(),
     })
     return job_id, folder
 
 
-def _process(folder: Path, source_path: Path | None = None, url: str | None = None) -> None:
-    try:
-        LOGGER.info("ClipForge job %s started", folder.name)
-        if url:
-            _patch(folder, status="downloading", progress=3)
-            source_path = download_video(url, folder)
-        assert source_path is not None
-        _patch(folder, status="analyzing", progress=10)
-        info = probe(source_path)
+def _stage(folder: Path, status: str, progress: int) -> None:
+    """Keep already-earned progress during checkpoint recovery."""
+    with LOCK:
         job = _read(folder)
+        job.update(status=status, progress=max(job.get("progress", 0), progress))
+        _write(folder, job)
+
+
+def _process(folder: Path, source_path: Path | None = None, url: str | None = None) -> None:
+    """Resume from persisted media, transcript, AI scores and finished renders."""
+    try:
+        job = _read(folder)
+        if job["status"] == "completed":
+            return
         opts = Options(**job["options"])
+        LOGGER.info("ClipForge job %s started or resumed", folder.name)
+        source_path = source_path or recover_source(folder, job)
+        if source_path is None and job["source"] == "url":
+            url = validate_url(url or job.get("source_url") or job["label"])
+            _stage(folder, "downloading", 3)
+            source_path = download_video(url, folder)
+        if source_path is None:
+            raise FileNotFoundError(
+                "Original upload is unavailable. Submit this video again; "
+                "incomplete browser uploads cannot yet be resumed."
+            )
+        _stage(folder, "analyzing", 10)
+        info = probe(source_path)
+        # Only record a completed source after ffprobe accepts it.
+        _patch(folder, source_file=source_path.name)
+
         energy = []
         if info["has_audio"]:
-            try:
-                energy = audio_energy(source_path, info["duration"])
-            except (OSError, RuntimeError):
-                pass
+            cached = load_json(folder / "audio-energy.json")
+            if isinstance(cached, list) and all(
+                isinstance(value, (int, float)) for value in cached
+            ):
+                energy = cached
+            else:
+                try:
+                    energy = audio_energy(source_path, info["duration"])
+                except (OSError, RuntimeError):
+                    LOGGER.warning("Audio energy unavailable for %s", folder.name)
+                save_json(folder / "audio-energy.json", energy)
+
         transcript = []
         if opts.selection_mode == "ai" or opts.caption_style != "none":
             if not info["has_audio"]:
                 raise RuntimeError("Speech transcription needs a video with audio")
-            _patch(folder, status="transcribing", progress=12)
-            LOGGER.info("ClipForge job %s transcribing audio", folder.name)
-            transcript = transcribe(source_path, DATA_DIR / "models")
-            (folder / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
-        if opts.selection_mode == "ai":
-            _patch(folder, status="selecting", progress=16)
-            candidates = select_ai_highlights(
-                transcript, info["duration"], opts.clip_seconds, opts.max_clips, energy,
-            )
+            _stage(folder, "transcribing", 12)
+            saved_transcript = load_json(folder / "transcript.json")
+            if isinstance(saved_transcript, list):
+                transcript = saved_transcript
+                LOGGER.info("Reused transcription for ClipForge job %s", folder.name)
+            else:
+                LOGGER.info("Transcribing ClipForge job %s", folder.name)
+                transcript = transcribe(source_path, DATA_DIR / "models")
+                save_json(folder / "transcript.json", transcript)
+
+        candidates = load_json(folder / "candidates.json")
+        if not isinstance(candidates, list) or not candidates or not all(
+            isinstance(c, dict) and isinstance(c.get("start"), (float, int))
+            and isinstance(c.get("duration"), (float, int)) for c in candidates
+        ):
+            if opts.selection_mode == "ai":
+                _stage(folder, "selecting", 16)
+                candidates = select_ai_highlights(
+                    transcript, info["duration"], opts.clip_seconds, opts.max_clips,
+                    energy, folder / "ai-scores.json",
+                )
+            else:
+                candidates = select_highlights(
+                    info["duration"], opts.clip_seconds, opts.max_clips, energy,
+                )
+            if not candidates:
+                raise ValueError("No suitable clips were found")
+            save_json(folder / "candidates.json", candidates)
         else:
-            candidates = select_highlights(
-                info["duration"], opts.clip_seconds, opts.max_clips, energy,
-            )
-        if not candidates:
-            raise ValueError("No suitable clips were found")
+            LOGGER.info("Reused %d selected clips for job %s", len(candidates), folder.name)
+
         output = folder / "clips"
         output.mkdir(exist_ok=True)
-        _patch(folder, status="rendering", duration=round(info["duration"], 2), progress=20)
-        LOGGER.info("ClipForge job %s rendering %s clips", folder.name, len(candidates))
+        _stage(folder, "rendering", 20)
+        _patch(folder, duration=round(info["duration"], 2))
+        LOGGER.info("ClipForge job %s rendering/checking %s clips", folder.name, len(candidates))
+        previous = {
+            c.get("number"): c for c in _read(folder).get("clips", [])
+            if isinstance(c, dict)
+        }
         clips = []
         for index, candidate in enumerate(candidates, 1):
             filename = f"clip-{index:03d}.mp4"
             thumbnail = f"clip-{index:03d}.jpg"
-            subtitles = None
-            if opts.caption_style != "none":
-                candidate_ass = output / f"clip-{index:03d}.ass"
-                if write_captions(transcript, candidate["start"], candidate["duration"],
-                                  opts.caption_style, candidate_ass):
-                    subtitles = candidate_ass
-            render_clip(
-                source_path, output / filename, candidate["start"], candidate["duration"],
-                opts.aspect_ratio, captions=subtitles, effect=opts.effect, framing=opts.framing,
+            destination = output / filename
+            cached_clip = previous.get(index)
+            can_skip = (
+                cached_clip is not None
+                and cached_clip.get("filename") == filename
+                and cached_clip.get("start") == candidate["start"]
+                and cached_clip.get("duration") == candidate["duration"]
+                and destination.is_file()
+                and destination.stat().st_size > 0
             )
-            try:
-                render_thumbnail(output / filename, output / thumbnail)
-            except (OSError, RuntimeError):
-                thumbnail = None
-            clips.append({
-                "filename": filename, "thumbnail": thumbnail, "number": index,
-                "captions_added": subtitles is not None, "effect": opts.effect,
-                "framing": opts.framing, **candidate,
-            })
-            _patch(folder, clips=clips, progress=20 + int(index / len(candidates) * 79))
-        _patch(folder, status="completed", progress=100)
+            if can_skip:
+                try:
+                    probe(destination)
+                except (OSError, RuntimeError, ValueError):
+                    can_skip = False
+            if can_skip:
+                LOGGER.info("Reused rendered clip %s for job %s", filename, folder.name)
+                if cached_clip.get("thumbnail") and not (output / thumbnail).is_file():
+                    try:
+                        render_thumbnail(destination, output / thumbnail)
+                    except (OSError, RuntimeError):
+                        cached_clip["thumbnail"] = None
+                clips.append(cached_clip)
+            else:
+                subtitles = None
+                if opts.caption_style != "none":
+                    ass = output / f"clip-{index:03d}.ass"
+                    if write_captions(
+                        transcript, candidate["start"], candidate["duration"],
+                        opts.caption_style, ass,
+                    ):
+                        subtitles = ass
+                # A crash during FFmpeg must not leave a supposedly valid clip.
+                partial = output / f".clip-{index:03d}.partial.mp4"
+                partial.unlink(missing_ok=True)
+                render_clip(
+                    source_path, partial, candidate["start"], candidate["duration"],
+                    opts.aspect_ratio, captions=subtitles, effect=opts.effect,
+                    framing=opts.framing,
+                )
+                os.replace(partial, destination)
+                try:
+                    render_thumbnail(destination, output / thumbnail)
+                except (OSError, RuntimeError):
+                    thumbnail = None
+                clips.append({
+                    "filename": filename, "thumbnail": thumbnail, "number": index,
+                    "captions_added": subtitles is not None, "effect": opts.effect,
+                    "framing": opts.framing, **candidate,
+                })
+            _patch(folder, clips=clips, progress=max(
+                _read(folder).get("progress", 0),
+                20 + int(index / len(candidates) * 79),
+            ))
+        _patch(folder, status="completed", progress=100, error=None)
         LOGGER.info("ClipForge job %s completed", folder.name)
     except Exception as exc:
         LOGGER.exception("ClipForge job %s failed", folder.name)
-        _patch(folder, status="failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        _patch(folder, status="failed",
+               error=f"{type(exc).__name__}: {str(exc)[:500]}")
+
+
+def recover_interrupted_jobs() -> None:
+    """Auto-resume queued/in-progress jobs after a process/container restart."""
+    for job_file in sorted(DATA_DIR.glob("*/job.json")):
+        folder = job_file.parent
+        try:
+            with LOCK:
+                job = _read(folder)
+                if job.get("status") not in ACTIVE_STATES:
+                    continue
+                job.update(status="queued", error=None,
+                           resume_count=job.get("resume_count", 0) + 1)
+                _write(folder, job)
+                POOL.submit(_process, folder)
+                LOGGER.info("Requeued interrupted ClipForge job %s", folder.name)
+        except (OSError, ValueError, KeyError):
+            LOGGER.exception("Unable to recover job %s", folder.name)
 
 
 @app.get("/")
@@ -277,6 +395,21 @@ def list_jobs():
         except (ValueError, OSError):
             pass
     return sorted(jobs, key=lambda item: item["created_at"], reverse=True)[:50]
+
+
+@app.post("/api/jobs/{job_id}/resume", status_code=202)
+def resume_job(job_id: str):
+    """Manual recovery of a failed job; never start the same job twice."""
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        if job["status"] != "failed":
+            raise HTTPException(409, "Only failed jobs can be resumed manually")
+        job.update(status="queued", error=None,
+                   resume_count=job.get("resume_count", 0) + 1)
+        _write(folder, job)
+        POOL.submit(_process, folder)
+        return {"id": job_id, "status": "queued", "resume_count": job["resume_count"]}
 
 
 @app.get("/api/jobs/{job_id}")

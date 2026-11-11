@@ -86,6 +86,36 @@ Connect to [Google Cloud](https://console.cloud.google.com/), [Meta for Develope
 
 Every post requires review and a separate confirmation. **There is no automatic cross-posting without approval, scheduling, public URL hosting, or bulk auto-publish.** Even though Tailscale remains private, Instagram's resumable API accepts uploaded binary media; its URL-based variant is not used. Publishing integrations are beta: CI tests validate request structure using mocks, **not live account access or real external publication**.
 
+## Automatic retries and checkpoint recovery
+
+ClipForge now checkpoints completed source media, audio-energy analysis, Whisper
+transcripts, each successful Ollama scoring batch, selected candidates, and
+individual rendered MP4 clips in its persistent media volume.
+
+- On transient Ollama failures, ClipForge retries each scoring request up to three
+  times with exponential backoff. A smaller default batch (four excerpts) and
+  a 600-second request timeout help CPU-only mini servers.
+- For failed jobs, select **Resume job** in the Clip Library, or call
+  `POST /api/jobs/{id}/resume`. It will reuse saved results and only redo
+  incomplete stages, keeping the original job ID.
+- Jobs interrupted by a container restart automatically requeue at startup.
+  Failed jobs are not automatically restarted forever; resume them manually.
+- Model changes invalidate AI score checkpoints. Browser uploads interrupted
+  mid-upload must be submitted again; Whisper transcription is checkpointed
+  when fully complete, not paragraph-by-paragraph. Invalid source media and
+  certificate failures cannot be repaired just by retrying.
+
+Optional settings in .env (restart/recreate ClipForge after editing):
+
+```env
+CLIPFORGE_AI_BATCH_SIZE=4
+CLIPFORGE_AI_TIMEOUT=600
+CLIPFORGE_AI_RETRIES=3
+```
+
+Run your existing host-Tailscale deployment with
+`docker compose --profile ai up -d --build --remove-orphans`.
+Keep Docker volumes; do not run `docker compose down -v`.
 ## API
 
 API schema: `/api/docs`.
