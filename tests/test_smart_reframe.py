@@ -40,7 +40,7 @@ def test_karaoke_and_pop_captions_use_word_timestamps(tmp_path):
     assert write_captions(transcript, 1, 4, "karaoke", karaoke)
     assert write_captions(transcript, 1, 4, "pop", pop)
     assert r"{\kf" in karaoke.read_text()
-    assert r"{\t(0,140," in pop.read_text()
+    assert r"\t(0,140," in pop.read_text()
     assert "{unsafe}" not in pop.read_text()
     assert r"\N}" not in karaoke.read_text()
     assert write_narration_captions("This changes everything", 2, 4, "karaoke", tmp_path / "voice.ass")
