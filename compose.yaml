@@ -25,6 +25,7 @@ services:
       CLIPFORGE_META_API_VERSION: ${CLIPFORGE_META_API_VERSION:-v24.0}
     volumes:
       - clipforge_data:/data
+      - ./private-auth:/run/clipforge-auth:ro
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

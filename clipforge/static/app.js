@@ -431,6 +431,13 @@ async function loadSettings() {
         'Whisper: ' + (settings.ai.whisper_installed ? 'installed' : 'unavailable') +
         ' · Ollama: ' + (settings.ai.ollama_configured ? 'configured' : 'not configured') +
         ' · Model: ' + settings.ai.model;
+      const yt = settings.youtube_import || {configured: false, status: 'not_configured'};
+      $('settings-youtube-status').textContent =
+        yt.status === 'ready'
+          ? 'YouTube session file detected and validated. Downloads may still require browser or network verification.'
+          : yt.status === 'invalid'
+            ? 'Cookie file detected but invalid or unreadable. Check Netscape format and UID 10001 permissions.'
+            : 'No private YouTube cookie file detected. URL downloads may require verification.';
       $('settings-voice-status').textContent =
         settings.narration.elevenlabs_configured
           ? 'ElevenLabs voiceover is configured on this server.'
