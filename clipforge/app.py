@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -40,6 +41,7 @@ POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
 LOCK = threading.RLock()
 STATIC = Path(__file__).resolve().parent / "static"
+LOGGER = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="ClipForge", version=__version__, docs_url="/api/docs")
 app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
@@ -119,6 +121,7 @@ def _create(kind: str, options: Options, label: str) -> tuple[str, Path]:
 
 def _process(folder: Path, source_path: Path | None = None, url: str | None = None) -> None:
     try:
+        LOGGER.info("ClipForge job %s started", folder.name)
         if url:
             _patch(folder, status="downloading", progress=3)
             source_path = download_video(url, folder)
@@ -138,6 +141,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
             if not info["has_audio"]:
                 raise RuntimeError("Speech transcription needs a video with audio")
             _patch(folder, status="transcribing", progress=12)
+            LOGGER.info("ClipForge job %s transcribing audio", folder.name)
             transcript = transcribe(source_path, DATA_DIR / "models")
             (folder / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
         if opts.selection_mode == "ai":
@@ -154,6 +158,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
         output = folder / "clips"
         output.mkdir(exist_ok=True)
         _patch(folder, status="rendering", duration=round(info["duration"], 2), progress=20)
+        LOGGER.info("ClipForge job %s rendering %s clips", folder.name, len(candidates))
         clips = []
         for index, candidate in enumerate(candidates, 1):
             filename = f"clip-{index:03d}.mp4"
@@ -179,7 +184,9 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
             })
             _patch(folder, clips=clips, progress=20 + int(index / len(candidates) * 79))
         _patch(folder, status="completed", progress=100)
+        LOGGER.info("ClipForge job %s completed", folder.name)
     except Exception as exc:
+        LOGGER.exception("ClipForge job %s failed", folder.name)
         _patch(folder, status="failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
 
 
@@ -324,6 +331,7 @@ def _publish_worker(folder: Path, pub_id: str, platform: str, path: Path,
         outcome = publish(platform, path, title, description, visibility)
         _publication_update(folder, pub_id, **outcome)
     except Exception as exc:
+        LOGGER.exception("ClipForge publication %s failed", pub_id)
         _publication_update(folder, pub_id, state="failed",
                             error=f"{type(exc).__name__}: {str(exc)[:350]}")
 
