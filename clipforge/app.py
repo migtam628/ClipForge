@@ -75,7 +75,7 @@ class Options(BaseModel):
     max_clips: int = Field(default=25, ge=1, le=100)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     selection_mode: Literal["ai", "energy"] = "energy"
-    caption_style: Literal["none", "classic", "bold", "neon"] = "none"
+    caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop", "smart", "blur"] = "pad"
     hook_style: Literal["none", "headline"] = "none"
@@ -97,7 +97,7 @@ class ClipEditRequest(BaseModel):
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop", "smart", "blur"] = "crop"
-    caption_style: Literal["none", "classic", "bold", "neon"] = "bold"
+    caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
     voiceover: bool = False
