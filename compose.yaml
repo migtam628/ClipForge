@@ -5,11 +5,30 @@ services:
       - "127.0.0.1:8765:8765"
     environment:
       CLIPFORGE_DATA_DIR: /data
+      CLIPFORGE_OLLAMA_URL: ${CLIPFORGE_OLLAMA_URL:-http://ollama:11434}
+      CLIPFORGE_AI_MODEL: ${CLIPFORGE_AI_MODEL:-llama3.2:3b}
+      CLIPFORGE_WHISPER_MODEL: ${CLIPFORGE_WHISPER_MODEL:-base}
+      CLIPFORGE_YOUTUBE_CLIENT_ID: ${CLIPFORGE_YOUTUBE_CLIENT_ID:-}
+      CLIPFORGE_YOUTUBE_CLIENT_SECRET: ${CLIPFORGE_YOUTUBE_CLIENT_SECRET:-}
+      CLIPFORGE_YOUTUBE_REFRESH_TOKEN: ${CLIPFORGE_YOUTUBE_REFRESH_TOKEN:-}
+      CLIPFORGE_INSTAGRAM_TOKEN: ${CLIPFORGE_INSTAGRAM_TOKEN:-}
+      CLIPFORGE_INSTAGRAM_USER_ID: ${CLIPFORGE_INSTAGRAM_USER_ID:-}
+      CLIPFORGE_FACEBOOK_PAGE_ACCESS_TOKEN: ${CLIPFORGE_FACEBOOK_PAGE_ACCESS_TOKEN:-}
+      CLIPFORGE_TIKTOK_ACCESS_TOKEN: ${CLIPFORGE_TIKTOK_ACCESS_TOKEN:-}
+      CLIPFORGE_META_API_VERSION: ${CLIPFORGE_META_API_VERSION:-v24.0}
     volumes:
       - clipforge_data:/data
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ai]
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
 volumes:
+  ollama_models:
   clipforge_data:

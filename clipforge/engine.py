@@ -154,11 +154,38 @@ def select_highlights(
     ]
 
 
-def render_clip(source: Path, dest: Path, start: float, length: float, ratio: str) -> None:
+def render_clip(
+    source: Path, dest: Path, start: float, length: float, ratio: str,
+    captions: Path | None = None, effect: str = "none", framing: str = "pad",
+) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
-    # Preserve the full shot instead of cropping people out of wide footage.
-    vf = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+    if framing == "crop":
+        vf = (
+            f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},setsar=1"
+        )
+    elif framing == "pad":
+        vf = (
+            f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"
+        )
+    else:
+        raise ValueError("Unsupported framing")
+    effects = {
+        "none": "",
+        "pop": "eq=contrast=1.12:saturation=1.24,unsharp=5:5:0.6",
+        "cinema": "eq=contrast=1.07:saturation=0.86,vignette=PI/5",
+        "noir": "hue=s=0,eq=contrast=1.16",
+    }
+    if effect not in effects:
+        raise ValueError("Unsupported video effect")
+    if effects[effect]:
+        vf += "," + effects[effect]
+    if captions is not None:
+        # Caption paths are server-owned UUID locations, never user-provided paths.
+        safe_path = str(captions).replace("\\", "\\\\").replace(":", "\\:")
+        vf += ",ass=" + safe_path
     subprocess.run(
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",

@@ -79,3 +79,49 @@ def test_upload_and_export(tmp_path, monkeypatch):
     assert exported.content[:2] == b"PK"
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert not (Path(tmp_path) / job_id).exists()
+
+
+def test_ai_editing_upload_end_to_end_with_stub_models(tmp_path, monkeypatch):
+    """Proves the real API, captions and FFmpeg chain works without model downloads."""
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    source = tmp_path / "ai-source.mp4"
+    import subprocess
+
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+        "testsrc2=size=160x90:rate=10:duration=3.5", "-f", "lavfi", "-i",
+        "sine=frequency=440:duration=3.5", "-shortest", "-c:v", "libx264",
+        "-preset", "ultrafast", "-c:a", "aac", str(source),
+    ], capture_output=True, check=True)
+    transcript = [{
+        "start": 0, "end": 3, "text": "An exciting discovery!",
+        "words": [
+            {"start": 0.5, "end": 0.9, "text": "An"},
+            {"start": 0.9, "end": 1.7, "text": "exciting"},
+            {"start": 1.7, "end": 2.5, "text": "discovery!"},
+        ],
+    }]
+    monkeypatch.setattr(module, "transcribe", lambda *args: transcript)
+    monkeypatch.setattr(module, "select_ai_highlights", lambda *args: [{
+        "start": 0, "duration": 3.2, "score": 9.1,
+        "title": "Big discovery", "reason": "Strong hook",
+    }])
+    with source.open("rb") as stream:
+        response = client.post("/api/uploads", data={
+            "clip_seconds": "15", "max_clips": "5", "rights_confirmed": "true",
+            "selection_mode": "ai", "caption_style": "bold", "effect": "pop",
+            "framing": "crop",
+        }, files={"file": ("source.mp4", stream, "video/mp4")})
+    assert response.status_code == 202, response.text
+    job_id = response.json()["id"]
+    deadline = time.monotonic() + 50
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.1)
+    assert job["status"] == "completed", job.get("error")
+    assert len(job["clips"]) == 1
+    assert job["clips"][0]["captions_added"] is True
+    assert job["clips"][0]["title"] == "Big discovery"
+    assert client.get(f"/api/jobs/{job_id}/export").status_code == 200
