@@ -159,3 +159,22 @@ def test_creator_ui_has_profiles_and_post_copy_action():
     script = client.get("/assets/app.js").text
     assert "/api/creator/profiles" in script
     assert "Draft post copy from video" in script
+
+
+
+def test_single_upload_keeps_creator_brief_and_brand(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    calls = []
+    monkeypatch.setattr(module.POOL, "submit", lambda *args: calls.append(args))
+    response = client.post("/api/uploads", data={
+        "rights_confirmed": "true", "clip_focus": "A surprise ending",
+        "content_niche": "travel", "use_voice_markers": "false",
+        "brand_text": "@travelchannel", "selection_mode": "ai",
+    }, files={"file": ("test.mp4", b"test-video", "video/mp4")})
+    assert response.status_code == 202, response.text
+    job = module._read(module.job_folder(response.json()["id"]))
+    assert job["options"]["clip_focus"] == "A surprise ending"
+    assert job["options"]["content_niche"] == "travel"
+    assert job["options"]["use_voice_markers"] is False
+    assert job["options"]["brand_text"] == "@travelchannel"
+    assert len(calls) == 1

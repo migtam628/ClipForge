@@ -773,6 +773,10 @@ async def submit_upload(
     narration_style: str = Form("energetic"),
     narration_language: str = Form("en"),
     narration_basis: str = Form("speech"),
+    clip_focus: str = Form(""),
+    content_niche: str = Form("general"),
+    use_voice_markers: bool = Form(True),
+    brand_text: str = Form(""),
     rights_confirmed: bool = Form(False),
 ):
     if not rights_confirmed:
@@ -784,6 +788,8 @@ async def submit_upload(
             effect=effect, framing=framing, hook_style=hook_style,
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
+            clip_focus=clip_focus, content_niche=content_niche,
+            use_voice_markers=use_voice_markers, brand_text=brand_text,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
