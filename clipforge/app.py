@@ -27,6 +27,7 @@ from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
 from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
 from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.captions import (
+    write_brand_sticker,
     write_captions,
     write_hook,
     write_narration_captions,
@@ -154,6 +155,7 @@ class ClipEditRequest(BaseModel):
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
+    brand_text: str = Field(default="", max_length=36)
     regenerate_storyboard: bool = False
     narration_basis: Literal["video", "speech"] = "video"
     voiceover: bool = False
@@ -439,6 +441,13 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     proposed = output / f"clip-{index:03d}-hook.ass"
                     if write_hook(candidate["title"], candidate["duration"], proposed):
                         hook_file = proposed
+                brand_file = None
+                if opts.brand_text.strip():
+                    proposed = output / f"clip-{index:03d}-brand.ass"
+                    if write_brand_sticker(
+                        opts.brand_text, candidate["duration"], proposed,
+                    ):
+                        brand_file = proposed
                 # A crash during FFmpeg must not leave a supposedly valid clip.
                 partial = output / f".clip-{index:03d}.partial.mp4"
                 partial.unlink(missing_ok=True)
@@ -456,7 +465,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
                     framing=opts.framing, voiceover=voiceover,
                     has_source_audio=info["has_audio"], hook=hook_file,
-                    smart_track=smart_track,
+                    smart_track=smart_track, brand=brand_file,
                 )
                 os.replace(partial, destination)
                 try:
@@ -473,6 +482,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "frame_samples": storyboard["frame_samples"] if storyboard else 0,
                     "creator_focus": opts.clip_focus,
                     "creator_niche": opts.content_niche,
+                    "brand_text": opts.brand_text.strip(),
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
                     "face_tracking": smart_track is not None,
@@ -1017,6 +1027,11 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             if write_hook(edit.title, edit.duration, ass):
                 hook_file = ass
 
+        brand_file = None
+        if edit.brand_text.strip():
+            proposed = output / f"{base}-brand.ass"
+            if write_brand_sticker(edit.brand_text, edit.duration, proposed):
+                brand_file = proposed
         smart_track = None
         if edit.framing == "smart":
             track = output / f"{base}-tracking.txt"
@@ -1029,7 +1044,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
-            smart_track=smart_track,
+            smart_track=smart_track, brand=brand_file,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1049,6 +1064,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
+                    "brand_text",
                 )
             })
             target.update(
@@ -1065,6 +1081,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 storyboard=(storyboard["beats"] if storyboard else []),
                 analysis_basis=(storyboard["analysis_basis"] if storyboard else "manual"),
                 frame_samples=(storyboard["frame_samples"] if storyboard else 0),
+                brand_text=edit.brand_text.strip(),
                 post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
