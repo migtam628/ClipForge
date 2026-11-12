@@ -260,7 +260,28 @@
             <section class="settings-card"><h2>AI processing</h2><p id="settings-ai-status">Checking Ollama configuration…</p><p class="helper-note">AI runs inside your private Docker network. For slower servers, reduce clips per job or choose Audio-energy mode.</p></section>
             <section class="settings-card"><h2>Commentator voice</h2><p id="settings-voice-status">Checking voice connection…</p><p class="helper-note">ElevenLabs voiceover requires <code>CLIPFORGE_ELEVENLABS_API_KEY</code> and <code>CLIPFORGE_ELEVENLABS_VOICE_ID</code> in your server's <code>.env</code>. Only generated script text is sent to the voice provider. API usage may incur charges.</p></section>
             <section class="settings-card"><h2>Publishing connections</h2><div id="settings-platforms"></div><p class="helper-note">Configure platform credentials in your server's private <code>.env</code>. Publishing is always manually approved.</p></section>
-            <section class="settings-card"><h2>Security &amp; storage</h2><p>ClipForge is a private, single-user preview with no built-in login. Keep Tailscale access limited to trusted devices. Docker volumes preserve existing clips and resumable checkpoints.</p></section>
+            <section class="settings-card" id="environment-manager" aria-labelledby="environment-heading">
+              <h2 id="environment-heading">System &amp; Environment (.env)</h2>
+              <p>Admin-only management of AI, narration, publishing and infrastructure keys. Secrets are never displayed after saving. Values are written to the host .env file only when the host agent is connected.</p>
+              <p id="admin-connection-status" class="helper-note" role="status">Checking administrator access…</p>
+              <form id="admin-login-form" class="admin-login-form" hidden>
+                <label for="admin-password">Administrator password</label>
+                <input id="admin-password" type="password" autocomplete="current-password" required minlength="1">
+                <button class="small-action primary-action" type="submit">Unlock environment settings</button>
+              </form>
+              <div id="admin-environment-panel" hidden>
+                <div class="environment-actions">
+                  <span id="admin-env-revision" class="helper-note"></span>
+                  <button type="button" id="admin-env-refresh" class="small-action">↻ Refresh</button>
+                  <button type="button" id="admin-logout" class="small-action">Lock settings</button>
+                </div>
+                <div id="environment-fields" class="environment-fields"></div>
+                <p class="helper-note">Saving writes the host .env. It does not restart the running application. A safe restart is required to apply updated Docker environment values, and should only happen when jobs are idle.</p>
+                <button id="admin-env-save" type="button" class="create-button">Save validated changes to .env</button>
+              </div>
+              <p id="admin-env-feedback" class="helper-note" role="status" aria-live="polite"></p>
+            </section>
+            <section class="settings-card"><h2>Security &amp; storage</h2><p>ClipForge uses private Tailscale access for the workspace. Administrator environment editing additionally requires Argon2 login, a CSRF-protected session and a restricted host Unix socket helper. Volume data and media are separate from environment credentials.</p></section>
           </div>
         </div>
       </section>
@@ -270,6 +291,7 @@
   </main>
 </div>
 <script src="/assets/theme.js" defer></script>
+<script src="/assets/env-settings.js" defer></script>
 <script src="/assets/app.js" defer></script>
 <script src="/assets/analytics.js" defer></script>
 </body>
