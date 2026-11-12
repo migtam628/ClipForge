@@ -374,6 +374,13 @@ function card(job, mode = currentPage) {
   const head = el('div', 'job-head');
   const meta = el('div');
   meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
+  if (mode === 'library' && job.clips[0]?.thumbnail) {
+    const cover = el('img', 'library-project-thumb');
+    cover.src = `/api/jobs/${job.id}/clips/${job.clips[0].thumbnail}`;
+    cover.alt = '';
+    cover.loading = 'lazy';
+    head.append(cover);
+  }
   head.append(meta, el('span', `job-status ${job.status === 'failed' ? 'failed' : ''}`, job.status));
   wrapper.append(head);
   if (job.batch_id)
@@ -427,15 +434,18 @@ function card(job, mode = currentPage) {
       } else description.append(link);
       if (clip.title && mode !== 'library')
         description.append(el('p', 'clip-ai-title', clip.title));
+      const tags = el('div', 'clip-tag-list');
+      const tagTarget = mode === 'library' ? tags : description;
+      if (mode === 'library') description.append(tags);
       if (clip.reason) description.append(el('p', 'clip-ai-reason', clip.reason));
-      if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
-      if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
-      if (clip.hook_style === 'headline') description.append(el('span', 'clip-tag', '✦ Opening hook'));
-      if (clip.voice_marker) description.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
-      if (clip.brand_text) description.append(el('span', 'clip-tag', '◇ ' + clip.brand_text));
-      if (clip.face_tracking) description.append(el('span', 'clip-tag', '◉ Face-aware crop'));
-      else if (clip.framing === 'smart') description.append(el('span', 'clip-tag', 'Centered fallback'));
-      if (clip.revision_count) description.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
+      if (clip.captions_added) tagTarget.append(el('span', 'clip-tag', 'CC · Captions burned in'));
+      if (clip.voiceover_added) tagTarget.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
+      if (clip.hook_style === 'headline') tagTarget.append(el('span', 'clip-tag', '✦ Opening hook'));
+      if (clip.voice_marker) tagTarget.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
+      if (clip.brand_text) tagTarget.append(el('span', 'clip-tag', '◇ ' + clip.brand_text));
+      if (clip.face_tracking) tagTarget.append(el('span', 'clip-tag', '◉ Face-aware crop'));
+      else if (clip.framing === 'smart') tagTarget.append(el('span', 'clip-tag', 'Centered fallback'));
+      if (clip.revision_count) tagTarget.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
       if (clip.revision_state === 'queued' || clip.revision_state === 'rendering')
         description.append(el('p', 'editor-progress', '⌁ Rendering your edited version…'));
       if (clip.revision_state === 'failed')
