@@ -289,6 +289,7 @@ def synthesize_timed_voice(storyboard: dict, folder: Path, base: str, duration: 
                     "A narration beat is too long for its scene. "
                     "Shorten the script or choose a longer clip before retrying TTS."
                 )
+            entry["playback_seconds"] = min(span, length / speed)
             segments.append(
                 f"[{input_index}:a]aresample=44100,aformat=channel_layouts=mono,"
                 f"atempo={speed:.3f},apad,atrim=0:{span:.3f},"

@@ -129,6 +129,8 @@ def test_timed_voice_assembly_and_captions_reach_last_scene(tmp_path, monkeypatc
     calls = []
 
     def fake_synthesize(words, file):
+        if file.is_file():
+            return file
         calls.append(words)
         subprocess.run([
             "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
@@ -149,7 +151,7 @@ def test_timed_voice_assembly_and_captions_reach_last_scene(tmp_path, monkeypatc
     # Cached final audio should not bill again for the same job.
     output2, _ = storyboard.synthesize_timed_voice(script, tmp_path, "test", 4.0)
     assert output2 == output
-    assert len(calls) == 4  # audio segment files are checkpointed by the real provider
+    assert len(calls) == 2  # cached segment outputs avoid repeat TTS charges
 
 
 def test_settings_exposes_vision_without_secret(tmp_path, monkeypatch):
