@@ -83,7 +83,7 @@ def validate_patch(changes: dict[str, str]) -> dict[str, str]:
         if kind == "meta-version" and not re.fullmatch(r"v\d+\.\d+", value):
             raise ValueError("Invalid Meta API version")
         if kind == "url" and not re.fullmatch(
-            r"https?://(?:ollama|localhost|127\\.0\\.0\\.1|host\\.docker\\.internal)(?::[0-9]{1,5})?/?",
+            r"https?://(?:ollama|localhost|127\.0\.0\.1|host\.docker\.internal)(?::[0-9]{1,5})?/?",
             value,
         ):
             raise ValueError("Ollama URL must use a trusted local host")
