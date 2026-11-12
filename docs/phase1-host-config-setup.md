@@ -115,6 +115,26 @@ docker compose --profile ai up -d --no-deps --force-recreate clipforge
 Then check health, AI model availability, voice configuration, publishing account
 status and the updated Settings fields.
 
+## Recovery from an environment mistake
+
+Every successful .env update first stores an encrypted copy of the previous
+version in `.clipforge-env-archive/<revision>.enc`; the key stays in
+`.clipforge-env-archive.key` (mode 0600). Both are ignored by Git.
+**Back up the encryption key separately using a secure backup process** or
+the encrypted snapshots cannot be recovered after disk loss.
+
+If a changed setting breaks the application, restore the previous revision on
+the HOST (not through the browser):
+
+```bash
+cd ~/ClipForge
+.venv/bin/python -m clipforge.config_agent --root "$PWD" \
+  --restore-revision PREVIOUS_REVISION_FROM_SETTINGS
+```
+
+Restore changes only the host .env. Re-run the idle-job safety check and recreate
+the application container separately to apply it.
+
 ## Security limitations and follow-up
 
 - No unrestricted host filesystem, Docker daemon, shell commands, or public configuration API.
@@ -122,8 +142,8 @@ status and the updated Settings fields.
 - Administrator sign-in is additional protection for config endpoints. The rest
   of ClipForge's existing single-user routes still rely on private Tailscale
   access. Do not expose this deployment to the public Internet.
-- The host agent can write `.env` but **automatic Apply, encrypted rollback
-  backups, credential rotation, per-account OAuth token encryption, and a complete
+- The host agent can write `.env` and creates encrypted revision snapshots, but **automatic Apply,
+  in-browser rollback, credential rotation, per-account OAuth token encryption, and a complete
   application-wide login wall are not included yet**. They are required for the
   full Phase 1 completion gate.
 - The environment UI never displays existing secret values.
