@@ -179,7 +179,7 @@ def test_narrated_job_records_script_and_voiceover(tmp_path, monkeypatch):
     clip = job["clips"][0]
     assert clip["script"] == "What a fascinating discovery."
     assert clip["voiceover_added"] is True
-    assert recorded[0]["voiceover"].name.endswith(".mp3")
+    assert recorded[0]["voiceover"].name.endswith("-timed.m4a")
     assert recorded[0]["has_source_audio"] is True
     assert clip["captions_added"] is True
 
