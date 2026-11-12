@@ -40,7 +40,6 @@ from clipforge.engine import (
 from clipforge.import_auth import youtube_cookie_status
 from clipforge.narration import (
     audio_duration,
-    build_script,
     narration_status,
     require_voice_config,
     synthesize,
@@ -638,6 +637,7 @@ async def submit_upload_batch(
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
     narration_language: str = Form("en"),
+    narration_basis: str = Form("speech"),
     rights_confirmed: bool = Form(False),
     voice_spend_approved: bool = Form(False),
 ):
@@ -651,7 +651,7 @@ async def submit_upload_batch(
             caption_style=caption_style, effect=effect,
             framing=framing, hook_style=hook_style,
             narration=narration, narration_style=narration_style,
-            narration_language=narration_language,
+            narration_language=narration_language, narration_basis=narration_basis,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -717,6 +717,7 @@ async def submit_upload(
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
     narration_language: str = Form("en"),
+    narration_basis: str = Form("speech"),
     rights_confirmed: bool = Form(False),
 ):
     if not rights_confirmed:
@@ -727,7 +728,7 @@ async def submit_upload(
             selection_mode=selection_mode, caption_style=caption_style,
             effect=effect, framing=framing, hook_style=hook_style,
             narration=narration, narration_style=narration_style,
-            narration_language=narration_language,
+            narration_language=narration_language, narration_basis=narration_basis,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
