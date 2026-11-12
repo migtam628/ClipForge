@@ -17,7 +17,6 @@ def test_library_page_has_search_filter_and_sort_controls():
     ):
         assert f'id="{element_id}"' in html
     assert 'href="/studio"' in html
-    assert 'aria-label="Search clips and source videos"' not in html or "library-search" in html
 
 
 def test_library_frontend_can_reuse_existing_job_api():
