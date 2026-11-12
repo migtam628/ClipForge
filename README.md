@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.9.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.10.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
@@ -177,6 +177,49 @@ errors before publishing. Timing for captioned TTS is approximate rather than
 provider-exact word alignment. Generation may be slow on CPU-only servers,
 especially with several clips and visual frames. Preserve the original
 footage and only clip videos you are authorized to use.
+
+## Creator-directed clip discovery and publishing drafts (v0.10)
+
+The **AI editor** now accepts a bounded, explicit instruction such as "Find
+funny reactions, unexpected travel moments, or the most useful advice".
+Select a **channel niche** to guide local Ollama scoring. The prompt is
+stored with the job and included in the AI score checkpoint signature, so
+different channel goals don't reuse unrelated highlight scores.
+
+The optional **spoken "clip this" marker** is detected from the recorded
+video's Whisper transcript and prioritized when selecting windows.
+Markers are not live microphone listening or automatic Twitch stream
+capture; they are analyzed after you provide your recording. AI scoring
+remains a review-required estimate of interesting moments.
+
+**Channel style presets**: Save up to 12 local presets combining preferred
+moment instructions, channel niche, captions, framing, effects, hook setting,
+spoken markers, and channel sticker text. This supports separate faceless
+channels under one parent media brand without storing social account tokens.
+
+**Channel text sticker**: Add an optional 36-character channel label to
+completed clips (a sanitized, burned-in ASS overlay in the social safe zone),
+and refine it later through Library's non-destructive editor. Text stickers
+are not image logos or an automated B-roll library.
+
+**Publishing copy drafts**: From the Publishing page, click **Draft post
+copy from video** on a completed clip. The local Ollama worker uses the
+selected transcript and available timed storyboard as evidence to propose
+a short title, description, and up to 5 relevant hashtags. Drafts are
+clearly labeled *AI suggestions requiring human review*, never submitted
+automatically. Existing Publishing forms prefill from a draft and remain
+fully editable; your explicit approval is still required before posting.
+AI drafts are checkpointed per clip and can be regenerated after editing.
+Clips without a transcript or storyboard require source transcription or
+a video-grounded script first.
+
+**Roadmap differences from Nexus Clips**: Twitch OAuth-based account imports
+and post-stream triggers, true livestream marker capture, image/logo sticker
+uploads, automatic B-roll selection and zoom/cut choreography still need
+separate engineering and creator authorization. They are not implemented or
+claimed here. Local processing is limited by the CPU/GPU capacity available
+on your own server, rather than offering any unlimited cloud-processing
+promise.
 
 ## What it does
 
