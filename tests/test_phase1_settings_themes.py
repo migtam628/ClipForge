@@ -1,15 +1,18 @@
 """Phase 1 appearance, admin access, and host environment safety checks."""
 import hashlib
-from pathlib import Path
 
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
-from clipforge import app as module
 from clipforge import admin_auth
+from clipforge import app as module
 from clipforge.environment import (
-    ENVIRONMENT_FIELDS, public_snapshot, read_env, update_env, validate_patch,
+    ENVIRONMENT_FIELDS,
+    public_snapshot,
+    read_env,
+    update_env,
+    validate_patch,
 )
 
 
