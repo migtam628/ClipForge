@@ -4,6 +4,9 @@ let polling = false;
 let platforms = [];
 let publishingPresets = [];
 let creatorProfiles = [];
+let libraryJobs = [];
+const libraryExpanded = new Set();
+let libraryInitialized = false;
 const validPages = ['studio', 'library', 'publishing', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
@@ -45,6 +48,10 @@ $('save-creator-profile').addEventListener('click', saveCreatorProfile);
 $('creator-profile-select').addEventListener('change', applyCreatorProfile);
 for (const button of document.querySelectorAll('[data-refresh]')) {
   button.addEventListener('click', refresh);
+}
+// Library search and filters are local: no new server requests for each keystroke.
+for (const id of ['library-search', 'library-filter', 'library-sort']) {
+  $(id).addEventListener(id === 'library-search' ? 'input' : 'change', renderLibrary);
 }
 function chosenVideoFiles() {
   const folderFiles = $('folder').files.length ? [...$('folder').files] : [...$('file').files];
@@ -363,7 +370,7 @@ function buildClipEditor(job, clip) {
 }
 
 function card(job, mode = currentPage) {
-  const wrapper = el('article', 'job');
+  const wrapper = el('article', mode === 'library' ? 'job library-job' : 'job');
   const head = el('div', 'job-head');
   const meta = el('div');
   meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
@@ -390,19 +397,36 @@ function card(job, mode = currentPage) {
     wrapper.append(actions);
     const grid = el('div', 'clip-grid');
     for (const clip of job.clips) {
-      const item = el('div', 'clip');
+      const item = el('div', mode === 'library' ? 'clip library-clip' : 'clip');
       const video = el('video');
       video.controls = true;
       video.preload = 'none';
       video.src = `/api/jobs/${job.id}/clips/${clip.filename}`;
       if (clip.thumbnail) video.poster = `/api/jobs/${job.id}/clips/${clip.thumbnail}`;
       const description = el('div', 'clip-info');
-      description.append(el('strong', '', `Clip ${String(clip.number).padStart(2, '0')}`), el('span', '', `${Math.floor(clip.start / 60)}:${String(Math.floor(clip.start % 60)).padStart(2, '0')} · ${clip.duration}s`));
-      const link = el('a', '', '↓ Save MP4');
+      const media = el('div', 'clip-media');
+      media.append(video);
+      const clipNumber = String(clip.number).padStart(2, '0');
+      const startTime = `${Math.floor(clip.start / 60)}:${String(Math.floor(clip.start % 60)).padStart(2, '0')}`;
+      if (mode === 'library') {
+        media.append(el('span', 'clip-duration', `${Math.round(clip.duration)}s`));
+        description.append(el('span', 'clip-eyebrow', `CLIP ${clipNumber}`));
+        description.append(el('h4', 'clip-title', clip.title || `Clip ${clipNumber}`));
+        description.append(el('span', 'clip-meta', `Starts at ${startTime} · ${clip.duration}s`));
+      } else {
+        description.append(el('strong', '', `Clip ${clipNumber}`),
+          el('span', '', `${startTime} · ${clip.duration}s`));
+      }
+      const link = el('a', 'clip-save-link', '↓ Download MP4');
       link.href = video.src;
       link.download = clip.filename;
-      description.append(link);
-      if (clip.title) description.append(el('p', 'clip-ai-title', clip.title));
+      if (mode === 'library') {
+        const quickActions = el('div', 'clip-quick-actions');
+        quickActions.append(link);
+        description.append(quickActions);
+      } else description.append(link);
+      if (clip.title && mode !== 'library')
+        description.append(el('p', 'clip-ai-title', clip.title));
       if (clip.reason) description.append(el('p', 'clip-ai-reason', clip.reason));
       if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
       if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
@@ -742,10 +766,23 @@ function card(job, mode = currentPage) {
         }
         description.append(status);
       }
-      item.append(video, description);
+      item.append(media, description);
       grid.append(item);
     }
-    wrapper.append(grid);
+    if (mode === 'library') {
+      const gallery = el('details', 'library-folder');
+      gallery.open = libraryExpanded.has(job.id);
+      const toggle = el('summary', 'library-folder-toggle');
+      toggle.append(el('span', 'library-folder-label', 'Preview & refine clips'),
+        el('span', 'library-folder-count', `${job.clips.length} clip${job.clips.length === 1 ? '' : 's'}`),
+        el('span', 'library-chevron', '⌄'));
+      gallery.addEventListener('toggle', () => {
+        if (gallery.open) libraryExpanded.add(job.id);
+        else libraryExpanded.delete(job.id);
+      });
+      gallery.append(toggle, grid);
+      wrapper.append(gallery);
+    } else wrapper.append(grid);
   }
   if (job.status === 'completed' || job.status === 'failed') {
     const actions = el('div', 'job-actions');
@@ -776,6 +813,67 @@ function card(job, mode = currentPage) {
   return wrapper;
 }
 
+function renderLibrary() {
+  if (currentPage !== 'library') return;
+  const query = $('library-search').value.trim().toLocaleLowerCase();
+  const filter = $('library-filter').value;
+  const sort = $('library-sort').value;
+  const allClips = libraryJobs.flatMap((job) => job.clips || []);
+  $('library-total-clips').textContent = String(allClips.length);
+  $('library-total-sources').textContent = String(libraryJobs.length);
+  $('library-total-narrated').textContent = String(
+    allClips.filter((clip) => clip.script || clip.voiceover_added).length);
+  const visible = libraryJobs.filter((job) => {
+    if (filter === 'ready' && (job.status !== 'completed' || !job.clips.length)) return false;
+    if (filter === 'processing' && !['queued', 'downloading', 'analyzing',
+      'transcribing', 'selecting', 'rendering'].includes(job.status)) return false;
+    if (!query) return true;
+    const searchable = [job.label, job.options?.content_niche,
+      ...(job.clips || []).flatMap((clip) =>
+        [clip.title, clip.reason, clip.script, clip.brand_text])].join(' ').toLocaleLowerCase();
+    return searchable.includes(query);
+  });
+  visible.sort((a, b) => {
+    if (sort === 'clips') return b.clips.length - a.clips.length ||
+      new Date(b.created_at) - new Date(a.created_at);
+    return sort === 'oldest'
+      ? new Date(a.created_at) - new Date(b.created_at)
+      : new Date(b.created_at) - new Date(a.created_at);
+  });
+  if (!libraryInitialized && visible.length) {
+    libraryExpanded.add(visible[0].id);
+    libraryInitialized = true;
+  }
+  const count = visible.reduce((sum, job) => sum + job.clips.length, 0);
+  $('library-summary').textContent =
+    `${visible.length} project${visible.length === 1 ? '' : 's'} · ${count} clip${count === 1 ? '' : 's'}`;
+  const target = $('jobs-library');
+  target.replaceChildren();
+  if (!visible.length) {
+    const empty = el('div', 'empty library-empty');
+    empty.append(el('div', 'empty-graphic', query || filter !== 'all' ? '⌕' : '▤'),
+      el('strong', '', query || filter !== 'all' ? 'No projects match your filters' :
+        'Your clip library is ready for its first project'),
+      el('span', '', query || filter !== 'all' ? 'Try a different search or project status.' :
+        'Create a video in Studio to see your clips here.'));
+    if (query || filter !== 'all') {
+      const clear = el('button', 'small-action', 'Clear filters');
+      clear.type = 'button';
+      clear.addEventListener('click', () => {
+        $('library-search').value = '';
+        $('library-filter').value = 'all';
+        renderLibrary();
+      });
+      empty.append(clear);
+    } else {
+      const create = el('a', 'small-action primary-action', '✦ Create clips');
+      create.href = '/studio';
+      empty.append(create);
+    }
+    target.append(empty);
+  } else target.append(...visible.map((job) => card(job, 'library')));
+}
+
 async function refresh() {
   if (!['library', 'publishing', 'activity'].includes(currentPage) || polling) return;
   polling = true;
@@ -792,27 +890,21 @@ async function refresh() {
       publishingPresets = await presetsResponse.json();
     if (!response.ok) throw new Error('Cannot reach ClipForge server');
     const jobs = await response.json();
-    const shown = currentPage === 'library'
-      ? jobs.filter((job) => job.clips.length > 0 || job.status === 'completed')
-      : currentPage === 'publishing'
-        ? jobs.filter((job) => job.status === 'completed')
-        : jobs;
-    target.replaceChildren();
-    if (!shown.length) {
-      const empty = el('div', 'empty');
-      empty.append(el('div', 'empty-graphic', '▤'),
-        el('strong', '', currentPage === 'activity' ? 'No processing jobs yet' :
-                          currentPage === 'publishing' ? 'No clips ready to publish' :
-                          'Your clip library is empty'),
-        el('span', '', currentPage === 'activity' ? 'Start a video in Studio to see it here.' :
-          'Create clips in Studio to populate this page.'));
-      target.append(empty);
-    } else {
-      target.append(...shown.map((job) => card(job, currentPage)));
-    }
+    const shown = currentPage === 'publishing'
+      ? jobs.filter((job) => job.status === 'completed') : jobs;
     if (currentPage === 'library') {
-      const count = shown.reduce((sum, job) => sum + job.clips.length, 0);
-      $('library-summary').textContent = count + ' clips across ' + shown.length + ' jobs';
+      libraryJobs = shown;
+      renderLibrary();
+    } else {
+      target.replaceChildren();
+      if (!shown.length) {
+        const empty = el('div', 'empty');
+        empty.append(el('div', 'empty-graphic', '▤'),
+          el('strong', '', currentPage === 'activity' ?
+            'No processing jobs yet' : 'No clips ready to publish'),
+          el('span', '', 'Create clips in Studio to populate this page.'));
+        target.append(empty);
+      } else target.append(...shown.map((job) => card(job, currentPage)));
     }
     if (currentPage === 'activity') {
       const working = jobs.filter((job) => !['failed', 'completed'].includes(job.status));
@@ -1043,7 +1135,8 @@ loadSettings();
 loadCreatorProfiles();
 refresh();
 setInterval(() => {
-  if (!['library', 'publishing', 'activity'].includes(currentPage)) return;
+  // Library is refreshed explicitly: don't interrupt paused previews, filters, or expanded folders.
+  if (!['publishing', 'activity'].includes(currentPage)) return;
   // Do not recreate a video player while someone is watching it or editing a post.
   if (![...document.querySelectorAll('video')].some((v) => !v.paused) &&
       ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden) &&
