@@ -516,6 +516,14 @@ def recover_interrupted_jobs() -> None:
                 elif job.get("status") == "completed":
                     dirty = False
                     for clip in job.get("clips", []):
+                        if clip.get("post_copy_state") in {"queued", "generating"}:
+                            clip["post_copy_state"] = "failed"
+                            clip["post_copy_error"] = (
+                                "Interrupted local AI publishing draft. "
+                                "Select Draft post copy again to retry."
+                            )
+                            dirty = True
+                    for clip in job.get("clips", []):
                         if clip.get("revision_state") not in {"queued", "rendering"}:
                             continue
                         request = clip.get("revision_request")
@@ -835,6 +843,10 @@ def _post_copy_worker(folder: Path, number: int) -> None:
         transcript = load_json(folder / "transcript.json")
         if not isinstance(transcript, list):
             transcript = []
+            source = recover_source(folder, job)
+            if source is not None and probe(source)["has_audio"]:
+                transcript = transcribe(source, DATA_DIR / "models")
+                save_json(folder / "transcript.json", transcript)
         opts = Options(**job["options"])
         draft = suggest_post_copy(
             clip, transcript, opts.content_niche, opts.narration_language,
