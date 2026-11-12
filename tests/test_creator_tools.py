@@ -4,9 +4,8 @@ import subprocess
 
 from fastapi.testclient import TestClient
 
-from clipforge import ai
+from clipforge import ai, creator_tools
 from clipforge import app as module
-from clipforge import creator_tools
 from clipforge.captions import write_brand_sticker
 from clipforge.engine import probe, render_clip
 
