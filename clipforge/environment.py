@@ -175,6 +175,53 @@ def _archive_encrypted(path: Path, original: bytes, revision: str) -> None:
         os.fsync(stream.fileno())
 
 
+def _atomic_replace(path: Path, data: bytes) -> None:
+    fd, temp = tempfile.mkstemp(prefix=".clipforge-env-", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temp, path)
+        dirfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def restore_env_revision(path: Path, revision: str) -> str:
+    """Host CLI only: restore authenticated encrypted revision atomically."""
+    from cryptography.fernet import Fernet, InvalidToken
+
+    if not re.fullmatch(r"[0-9a-f]{16}", revision or ""):
+        raise ValueError("Invalid revision")
+    if path.name != ".env" or path.is_symlink() or not path.is_file():
+        raise ValueError("Only existing regular host .env can be restored")
+    with _exclusive_lock(path):
+        keyfile = path.parent / ".clipforge-env-archive.key"
+        archive = path.parent / ".clipforge-env-archive" / (revision + ".enc")
+        if keyfile.is_symlink() or archive.is_symlink() or not archive.is_file():
+            raise ValueError("Archived environment revision not found")
+        try:
+            recovered = Fernet(keyfile.read_bytes().strip()).decrypt(archive.read_bytes())
+        except (ValueError, InvalidToken) as exc:
+            raise ValueError("Environment backup cannot be decrypted") from exc
+        if hashlib.sha256(recovered).hexdigest()[:16] != revision:
+            raise ValueError("Encrypted environment backup does not match revision")
+        current = path.read_bytes()
+        current_revision = hashlib.sha256(current).hexdigest()[:16]
+        if current_revision == revision:
+            return revision
+        _archive_encrypted(path, current, current_revision)
+        _atomic_replace(path, recovered)
+        return revision
+
+
 def update_env(path: Path, changes: dict[str, str], expected_revision: str) -> str:
     """Atomic, symlink-safe .env patch. Caller must authenticate and authorize."""
     changes = validate_patch(changes)
@@ -207,24 +254,8 @@ def update_env(path: Path, changes: dict[str, str], expected_revision: str) -> s
                 if updated and not updated[-1].endswith("\n"):
                     updated.append("\n")
                 updated.append(f"{key}={_encode(value)}\n")
-        # Do not persist a backup containing secret material in plaintext.
-        # A controlled encrypted rollback store will be added before automatic Apply.
+        # Protect the original with an encrypted host-only archive before replacement.
         data = "".join(updated).encode("utf-8")
         _archive_encrypted(path, original, revision)
-        fd, temp = tempfile.mkstemp(prefix=".clipforge-env-", dir=path.parent)
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as out:
-                out.write(data)
-                out.flush()
-                os.fsync(out.fileno())
-            os.replace(temp, path)
-            dirfd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(dirfd)
-            finally:
-                os.close(dirfd)
-        finally:
-            if os.path.exists(temp):
-                os.unlink(temp)
+        _atomic_replace(path, data)
         return hashlib.sha256(data).hexdigest()[:16]
