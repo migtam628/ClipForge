@@ -38,6 +38,10 @@ ENVIRONMENT_FIELDS = {
     "CLIPFORGE_YOUTUBE_COOKIES_FILE": ("Import", "container-path", False, "Read-only container cookie path"),
     "CLIPFORGE_DATA_DIR": ("Infrastructure", "readonly", False, "Container data mount: migration required"),
     "TS_AUTHKEY": ("Infrastructure", "secret", True, "Tailscale sidecar bootstrap credential"),
+    "CLIPFORGE_ADMIN_PASSWORD_HASH": ("Security", "readonly", True,
+                                      "Admin Argon2id hash: change via password rotation"),
+    "CLIPFORGE_CONFIG_GROUP_GID": ("Infrastructure", "int:1:65535", False,
+                                   "Host group access to configuration Unix socket"),
 }
 
 KEY_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")
@@ -131,7 +135,7 @@ def _encode(value: str) -> str:
 
 @contextmanager
 def _exclusive_lock(path: Path):
-    with open(path.with_suffix(".env.lock"), "a+", encoding="utf-8") as lock:
+    with open(path.parent / ".env.lock", "a+", encoding="utf-8") as lock:
         os.chmod(lock.fileno(), 0o600)
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         try:
