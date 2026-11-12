@@ -185,3 +185,31 @@ def write_storyboard_captions(beats: list[dict], clip_seconds: float,
              "text": word} for i, word in enumerate(words)
         ]})
     return write_captions(segments, 0, clip_seconds, style, path) if segments else False
+
+
+
+def write_brand_sticker(text: str, duration: float, path: Path) -> bool:
+    """Place user-defined channel text in a safe upper corner.
+
+    This is a deterministic text sticker, not unlicensed stock footage or
+    a claim of automatic logo generation. ASS markup is escaped.
+    """
+    sticker = " ".join(_safe(text).split()).strip()[:36]
+    if not sticker or duration < 0.5:
+        return False
+    output = [
+        "[Script Info]", "ScriptType: v4.00+", "PlayResX: 720", "PlayResY: 1280",
+        "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Brand,DejaVu Sans,31,&H00FFFFFF,&H000000FF,&H00111111,"
+        "&H6E111111,-1,0,0,0,100,100,0,0,3,2,1,9,45,45,230,1",
+        "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        f"Dialogue: 0,{_ass_time(0)},{_ass_time(duration)},Brand,,0,0,0,,{sticker}",
+    ]
+    path.write_text("\n".join(output) + "\n", encoding="utf-8")
+    return True
