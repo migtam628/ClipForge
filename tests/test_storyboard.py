@@ -1,0 +1,165 @@
+"""Regression tests for scene-by-scene, content-grounded script generation."""
+import json
+import subprocess
+
+import pytest
+
+from clipforge import storyboard
+from clipforge.captions import write_storyboard_captions
+
+
+def evidence():
+    return [
+        {"start": 0, "end": 8, "text": "The technician opens the control panel."},
+        {"start": 9, "end": 17, "text": "The indicator turns green."},
+        {"start": 18, "end": 25, "text": "The engineer checks connectivity."},
+        {"start": 26, "end": 30, "text": "The final test is ready."},
+        {"start": 85, "end": 92, "text": "Unrelated footage, outside the clip."},
+    ]
+
+
+def fake_response(payload, **kwargs):
+    import re
+
+    material = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+    assert not re.search("Unrelated footage", payload["prompt"])
+    return json.dumps({"beats": [
+        {"id": item["id"], "text": "Visible observation or speech at this moment."}
+        for item in material
+    ]})
+
+
+def test_windows_span_entire_clip():
+    for duration in [10, 15, 30, 60, 120]:
+        windows = storyboard.time_windows(duration)
+        assert 2 <= len(windows) <= 8
+        assert windows[0]["start"] == 0
+        assert windows[-1]["end"] == duration
+        assert all(left["end"] == right["start"]
+                   for left, right in zip(windows, windows[1:]))
+    with pytest.raises(ValueError):
+        storyboard.time_windows(121)
+
+
+def test_video_storyboard_samples_each_window_and_saves_timestamps(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture")
+    sampled = []
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda src, second: sampled.append(second) or "Green control light")
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    checkpoint = tmp_path / "scene.json"
+    result = storyboard.build_storyboard(
+        evidence(), 0, 30, "documentary", "en", checkpoint,
+        source=source, basis="video",
+    )
+    assert len(sampled) == len(result["beats"]) == 4
+    assert sampled == pytest.approx([3.75, 11.25, 18.75, 26.25])
+    assert result["analysis_basis"] == "video_frames_and_speech"
+    assert all(entry["basis"] == "frame+speech" for entry in result["beats"])
+    assert "Unrelated footage" not in checkpoint.read_text()
+
+
+def test_speech_only_never_calls_vision(tmp_path, monkeypatch):
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda *_: pytest.fail("Vision called in transcript-only mode"))
+    result = storyboard.build_storyboard(
+        evidence(), 0, 30, "casual", "es", tmp_path / "speech.json",
+        basis="transcript",
+    )
+    assert result["analysis_basis"] == "speech_only"
+    assert result["frame_samples"] == 0
+    assert result["beats"][-1]["end"] == 30
+
+
+def test_silent_video_uses_frames(tmp_path, monkeypatch):
+    source = tmp_path / "silent.mp4"
+    source.write_bytes(b"fixture")
+    monkeypatch.setattr(storyboard, "_ollama", lambda payload, **kwargs:
+                        json.dumps({"beats": [
+                            {"id": item["id"], "text": "The camera shows a room."}
+                            for item in json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+                        ]}))
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda *_: "A room with a red door.")
+    result = storyboard.build_storyboard(
+        [], 0, 12, "documentary", "en", tmp_path / "visual.json",
+        source=source, basis="video",
+    )
+    assert all(beat["basis"] == "frame" for beat in result["beats"])
+    with pytest.raises(RuntimeError, match="No source evidence"):
+        storyboard.build_storyboard(
+            [], 0, 12, "documentary", "en", tmp_path / "speech.json",
+            basis="transcript",
+        )
+
+
+def test_non_evidenced_windows_are_silent(tmp_path, monkeypatch):
+    monkeypatch.setattr(storyboard, "_ollama", lambda payload, **kwargs:
+                        json.dumps({"beats": [
+                            {"id": item["id"], "text": "Claimed something happened."}
+                            for item in json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+                        ]}))
+    result = storyboard.build_storyboard(
+        [{"start": 0, "end": 2, "text": "A dog is barking."}],
+        0, 30, "casual", "en", tmp_path / "result.json",
+        basis="transcript",
+    )
+    assert result["beats"][0]["text"]
+    assert all(not item["text"] for item in result["beats"][1:])
+
+
+def test_storyboard_rejects_malformed_ai_timeline(tmp_path, monkeypatch):
+    monkeypatch.setattr(storyboard, "_ollama", lambda *_: '{"beats":[{"id":0,"text":"a"}]}')
+    with pytest.raises(RuntimeError, match="invalid timed script"):
+        storyboard.build_storyboard(
+            evidence(), 0, 30, "casual", "en", tmp_path / "bad.json",
+        )
+
+
+def test_timed_voice_assembly_and_captions_reach_last_scene(tmp_path, monkeypatch):
+    from clipforge import narration
+
+    script = {"beats": [
+        {"start": 0, "end": 1.3, "text": "Beginning"},
+        {"start": 1.3, "end": 2.5, "text": ""},
+        {"start": 2.5, "end": 4.0, "text": "Closing"},
+    ]}
+    calls = []
+
+    def fake_synthesize(words, file):
+        calls.append(words)
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.7",
+            "-c:a", "libmp3lame", str(file),
+        ], check=True, capture_output=True)
+        return file
+
+    monkeypatch.setattr(narration, "synthesize", fake_synthesize)
+    output, beats = storyboard.synthesize_timed_voice(script, tmp_path, "test", 4.0)
+    assert output.is_file()
+    assert calls == ["Beginning", "Closing"]
+    assert 3.9 < narration.audio_duration(output) < 4.2
+    captions = tmp_path / "captions.ass"
+    assert write_storyboard_captions(beats, 4.0, "bold", captions)
+    assert "CLOSING" in captions.read_text()
+    assert "0:00:02." in captions.read_text()
+    # Cached final audio should not bill again for the same job.
+    output2, _ = storyboard.synthesize_timed_voice(script, tmp_path, "test", 4.0)
+    assert output2 == output
+    assert len(calls) == 4  # audio segment files are checkpointed by the real provider
+
+
+def test_settings_exposes_vision_without_secret(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from clipforge import app as module
+
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    resp = TestClient(module.app).get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json()["vision"]["model"]
+    assert "api_key" not in json.dumps(resp.json()["vision"]).lower()
+    page = TestClient(module.app).get("/studio").text
+    assert 'id="narration-basis"' in page
