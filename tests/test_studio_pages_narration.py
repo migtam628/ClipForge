@@ -22,6 +22,19 @@ def test_all_workspace_pages_are_navigable():
     assert "Generate AI script" in client.get("/studio").text
 
 
+def test_sidebar_version_is_read_from_backend():
+    """The UI must not display a stale hardcoded release version."""
+    html = client.get("/studio").text
+    javascript = client.get("/assets/app.js").text
+    health = client.get("/api/health")
+
+    assert health.status_code == 200
+    assert health.json()["version"] == module.__version__
+    assert 'id="app-version"' in html
+    assert "0.8 preview" not in html
+    assert "fetch('/api/health', {cache: 'no-store'})" in javascript
+
+
 def test_settings_defaults_are_persisted_and_validated(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     response = client.get("/api/settings")
