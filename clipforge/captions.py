@@ -155,3 +155,29 @@ def write_hook(title: str, duration: float, path: Path) -> bool:
     ]
     path.write_text("\n".join(script) + "\n", encoding="utf-8")
     return True
+
+
+
+def write_storyboard_captions(beats: list[dict], clip_seconds: float,
+                              style: str, path: Path) -> bool:
+    """Estimated timing of voiced beats, anchored to matching visual windows.
+
+    This deliberately does not claim ElevenLabs supplies word-aligned timestamps.
+    Voice segments are proportionally timed within their own beat, not spread
+    over the first seconds or artificially over the entire clip.
+    """
+    segments = []
+    for beat in beats:
+        words = str(beat.get("text", "")).split()
+        if not words:
+            continue
+        begin = max(0, float(beat["start"]))
+        duration = max(0.05, float(beat["end"]) - begin)
+        audible = min(duration, float(beat.get("playback_seconds", duration)))
+        step = audible / len(words)
+        segments.append({"words": [
+            {"start": round(begin + i * step, 3),
+             "end": round(min(clip_seconds, begin + (i + 1) * step), 3),
+             "text": word} for i, word in enumerate(words)
+        ]})
+    return write_captions(segments, 0, clip_seconds, style, path) if segments else False
