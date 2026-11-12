@@ -4,8 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d0f16">
+  <script>
+    try { const t = localStorage.getItem('clipforge.appearance.theme.v2');
+      document.documentElement.dataset.theme = ['precision','editorial','control'].includes(t) ? t : 'precision';
+    } catch { document.documentElement.dataset.theme = 'precision'; }
+  </script>
   <title>ClipForge Studio</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/themes.css">
 </head>
 <body>
 <div class="shell">
@@ -29,7 +35,15 @@
   <main>
     <header class="topbar">
       <div>Workspace <span class="crumb-sep">/</span> <b id="page-crumb">Studio</b></div>
-      <div class="top-actions"><span class="top-tag">TAILNET · PRIVATE</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API reference ↗</a></div>
+      <div class="top-actions">
+        <label class="appearance-picker" for="appearance-theme"><span aria-hidden="true">◐</span><span class="appearance-label">Appearance</span>
+          <select id="appearance-theme" data-theme-select aria-label="Appearance theme">
+            <option value="precision">Precision Studio</option>
+            <option value="editorial">Editorial Canvas</option>
+            <option value="control">Control Deck</option>
+          </select>
+        </label>
+        <span class="top-tag">TAILNET · PRIVATE</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API reference ↗</a></div>
     </header>
     <div class="main-content">
 
@@ -198,7 +212,17 @@
 
       <section id="view-settings" class="page-view" hidden>
         <div class="eyebrow">PERSONALIZE YOUR WORKFLOW</div><h1>Studio <span>settings.</span></h1>
-        <p class="lede">Save your preferred output settings. Your media stays on the server; service keys remain in its private environment.</p>
+        <p class="lede">Customize your look, workflow and connected services. Your media stays on your private server.</p>
+        <section class="settings-card appearance-settings" aria-labelledby="appearance-heading">
+          <div class="settings-heading"><div><h2 id="appearance-heading">Appearance &amp; Layout</h2>
+            <p>Switch instantly between all three approved ClipForge 2.0 designs. Your choice is saved in this browser.</p></div></div>
+          <div class="theme-choices" role="group" aria-label="Choose appearance">
+            <button class="theme-choice" type="button" data-theme-choice="precision" aria-pressed="true"><span class="theme-swatch swatch-precision"></span><strong>Precision Studio</strong><small>Dark · Lime · Spacious media cards</small></button>
+            <button class="theme-choice" type="button" data-theme-choice="editorial" aria-pressed="false"><span class="theme-swatch swatch-editorial"></span><strong>Editorial Canvas</strong><small>Warm light · Coral · Story-first layout</small></button>
+            <button class="theme-choice" type="button" data-theme-choice="control" aria-pressed="false"><span class="theme-swatch swatch-control"></span><strong>Control Deck</strong><small>Deep navy · Teal · Compact operations</small></button>
+          </div>
+          <button type="button" class="small-action" id="theme-reset">Reset to Precision Studio</button>
+        </section>
         <div class="settings-page-grid">
           <section class="settings-card"><h2>Default clip settings</h2><p>New Studio jobs start with these preferences. Individual jobs can still override them.</p>
             <form id="settings-form" class="settings-form">
@@ -245,6 +269,7 @@
     </div>
   </main>
 </div>
+<script src="/assets/theme.js" defer></script>
 <script src="/assets/app.js" defer></script>
 <script src="/assets/analytics.js" defer></script>
 </body>
