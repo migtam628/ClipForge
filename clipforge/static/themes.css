@@ -244,3 +244,47 @@ html[data-theme="control"] .library-job>.job-actions:last-child {padding:10px 17
   html[data-theme="control"] .library-folder>.clip-grid {grid-template-columns:minmax(0,1fr);}
 }
 @media(prefers-reduced-motion: reduce){.theme-choice{transition:none!important;}}
+/* Restricted host .env manager: compact but readable on every appearance. */
+.admin-login-form { display:flex; flex-direction:column; gap:12px; margin-top:16px; }
+.admin-login-form[hidden],#admin-environment-panel[hidden]{display:none!important}
+.admin-login-form label {font-size:12px;color:var(--theme-muted);font-weight:700;}
+.admin-login-form input,.environment-row input {
+  width:100%;min-width:0;min-height:42px;padding:9px 12px;
+  border:1px solid var(--theme-border);border-radius:9px;
+  background:var(--theme-panel-hi);color:var(--theme-ink);
+}
+.admin-login-form button {align-self:start;}
+.environment-actions {display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:14px 0;}
+.environment-actions .helper-note {margin-right:auto;}
+.environment-fields {display:flex;flex-direction:column;gap:10px;margin:16px 0 20px;}
+.environment-fields h3 {
+  font:700 14px 'Space Grotesk',sans-serif;
+  margin:17px 0 0;padding-top:14px;
+  border-top:1px solid var(--theme-border);color:var(--theme-ink);
+}
+.environment-row {
+  display:flex;flex-direction:column;gap:5px;
+  padding:10px;background:var(--theme-panel-hi);
+  border:1px solid var(--theme-border);border-radius:10px;
+}
+.environment-key {
+  font:700 11px ui-monospace, SFMono-Regular, monospace;
+  overflow-wrap:anywhere;color:var(--theme-ink);
+}
+.environment-description {font-size:11px;color:var(--theme-muted);line-height:1.45;}
+.environment-row input:disabled {cursor:not-allowed;opacity:.55;}
+.environment-clear {
+  align-self:flex-start;border:0;background:transparent;
+  color:var(--theme-muted);text-decoration:underline;font-size:11px;padding:3px;
+}
+#admin-env-save {height:auto;min-height:47px;line-height:1.4;padding:10px;}
+#admin-env-feedback {line-height:1.6;overflow-wrap:anywhere;}
+html[data-theme="editorial"] :is(.environment-row input,.admin-login-form input),
+html[data-theme="control"] :is(.environment-row input,.admin-login-form input) {
+  background:var(--theme-panel);color:var(--theme-ink);border-color:var(--theme-border);
+}
+@media (max-width:480px){
+  .appearance-picker select {width:102px;}
+  .environment-actions {flex-direction:column;align-items:stretch;}
+  .environment-actions .helper-note {margin:0;}
+}
