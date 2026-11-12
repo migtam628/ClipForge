@@ -80,6 +80,11 @@ def test_host_env_update_is_atomic_revision_checked_and_masked(tmp_path):
     assert values["CLIPFORGE_ELEVENLABS_API_KEY"] == "updated-private-token"
     assert "# protect comments\n" in path.read_text()
     assert path.stat().st_mode & 0o777 == 0o600
+    encrypted_backup = tmp_path / '.clipforge-env-archive' / (revision + '.enc')
+    assert encrypted_backup.is_file()
+    assert b'very-sensitive' not in encrypted_backup.read_bytes()
+    assert (encrypted_backup.stat().st_mode & 0o777) == 0o600
+    assert (tmp_path / '.clipforge-env-archive.key').is_file()
     snapshot = public_snapshot(path)
     assert snapshot["revision"] == new_revision
     assert "updated-private-token" not in str(snapshot)
