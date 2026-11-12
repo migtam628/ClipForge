@@ -82,8 +82,11 @@ def validate_patch(changes: dict[str, str]) -> dict[str, str]:
             raise ValueError("Invalid IP family")
         if kind == "meta-version" and not re.fullmatch(r"v\d+\.\d+", value):
             raise ValueError("Invalid Meta API version")
-        if kind == "url" and not re.fullmatch(r"https?://[A-Za-z0-9.:-]+/?", value):
-            raise ValueError("Invalid Ollama URL")
+        if kind == "url" and not re.fullmatch(
+            r"https?://(?:ollama|localhost|127\\.0\\.0\\.1|host\\.docker\\.internal)(?::[0-9]{1,5})?/?",
+            value,
+        ):
+            raise ValueError("Ollama URL must use a trusted local host")
         if kind == "container-path" and (
             not value.startswith("/run/clipforge-auth/") or ".." in value
         ):
@@ -161,6 +164,8 @@ def _archive_encrypted(path: Path, original: bytes, revision: str) -> None:
                 os.fsync(stream.fileno())
         except FileExistsError:
             pass
+    if keyfile.stat().st_mode & 0o077:
+        raise ValueError("Environment archive key permissions must be 0600")
     key = keyfile.read_bytes().strip()
     archive.mkdir(mode=0o700, exist_ok=True)
     os.chmod(archive, 0o700)
