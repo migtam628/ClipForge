@@ -15,7 +15,7 @@ import socket
 import socketserver
 from pathlib import Path
 
-from clipforge.environment import public_snapshot, update_env, validate_patch
+from clipforge.environment import public_snapshot, restore_env_revision, update_env, validate_patch
 
 MAX_REQUEST = 32768
 
@@ -99,12 +99,19 @@ def main() -> None:
                         help="ClipForge host project directory")
     parser.add_argument("--setup", action="store_true",
                         help="Initialize token and permissions only")
+    parser.add_argument("--restore-revision", default="",
+                        help="Host-only restore of an encrypted .env revision; never via the web API")
     args = parser.parse_args()
     root = args.root.resolve()
     env_file = root / ".env"
     private = root / "private-auth"
     if not env_file.is_file() or env_file.is_symlink():
         parser.error("The real host project .env file must exist (no symlinks)")
+    if args.restore_revision:
+        revision = restore_env_revision(env_file, args.restore_revision)
+        print("Restored host .env revision:", revision)
+        print("Docker services are NOT restarted. Verify idle queue before applying.")
+        return
     private.mkdir(mode=0o750, exist_ok=True)
     os.chmod(private, 0o750)
     keyfile = private / "config-agent.token"
