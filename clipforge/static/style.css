@@ -529,3 +529,19 @@ h1 { font-size: clamp(42px,4.7vw,60px); line-height: 1.08; letter-spacing: -2.9p
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition-duration: 0.01ms!important; animation-duration: 0.01ms!important; }
 }
+
+/* Project identity and compact caption/effect badges in the media library */
+.library-project-thumb {
+  flex: 0 0 67px; width: 67px; height: 67px;
+  border-radius: 10px; object-fit: cover;
+  border: 1px solid #3e4b57; background: #0d121a;
+}
+.library-job .job-head>div { flex: 1; min-width: 0; }
+.clip-tag-list {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  gap: 5px 6px; margin-top: 5px;
+}
+.library-clip .clip-tag-list .clip-tag { margin: 0; }
+@media (max-width: 690px) {
+  .library-project-thumb { width: 57px; height: 57px; flex-basis: 57px; }
+}
