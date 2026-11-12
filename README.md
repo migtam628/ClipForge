@@ -2,7 +2,7 @@
 
 **AI-powered self-hosted video-to-shorts studio.** Turn video files or authorized video links into ranked clips with burned-in captions, effects, previews and creator-approved social publishing.
 
-![Preview](https://img.shields.io/badge/version-0.8.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+![Preview](https://img.shields.io/badge/version-0.9.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
@@ -127,6 +127,56 @@ API: `POST/GET /api/analytics/records`, `DELETE
 /api/analytics/export`. Adding automatic API-driven performance sync will
 require provider permission review and verified account connections in a
 future phase. No fake metrics or projected revenue have been added.
+
+## Full-clip video-grounded narration (v0.9)
+
+The old one-paragraph commentator script used only the transcript and could
+finish long before the clip. In **Studio → Commentator & storytelling**, choose
+**Video frames + spoken words** and **Generate AI script** or **AI script +
+commentator voice**. The new workflow:
+
+1. Divides each selected 3–120 second clip into **2–8 timed sections** covering
+   the entire clip, from beginning to end.
+2. Uses Whisper to gather the **spoken words for each section**, then uses a
+   local Ollama vision model to inspect **one sampled still frame per section**.
+   Frames are kept in memory and not saved or sent to ElevenLabs.
+3. Asks the local language model to write a distinct narration beat for each
+   time section, constrained to evidence from that section. Sections with
+   insufficient evidence remain quiet rather than making up events.
+4. Saves a **reviewable timed script** in Library: e.g. 00:00–00:08,
+   00:08–00:15, etc. The script remains available even when narration audio
+   is not requested.
+5. In **narrated** mode, synthesizes one voice segment for each nonempty
+   section using ElevenLabs, then uses FFmpeg to align and concatenate audio
+   to the timeline. Estimated narration captions also follow the sections
+   instead of playing only at the beginning. These calls can incur **multiple
+   TTS charges per clip**; choose script-only for a free review first.
+6. **Library → Refine this clip** offers **Regenerate timed narration** from
+   the selected segment, optionally with explicit consent for new TTS.
+
+**Install the optional vision model on the Ollama Docker service before using
+Video frames + spoken words**:
+
+```bash
+cd ~/ClipForge
+docker compose --profile ai exec ollama ollama pull moondream
+docker compose --profile ai exec ollama ollama list
+```
+
+`moondream` is a small (~1.7 GB) image-capable model suited to CPU devices.
+The downloader and narrator models run locally; ElevenLabs receives only
+narration text when explicitly selected. You can choose **Spoken words only**
+without downloading a vision model. Silent footage requires video analysis
+rather than speech-only mode, and speech-based highlight ranking still needs
+audio. Existing completed clips aren't retroactively changed.
+
+**Limitations:** This is a still-frame sampler, not motion recognition or
+continuous shot-by-shot video understanding. It can miss quick events or
+misdescribe images. Review the timed script against the clip and correct
+errors before publishing. Timing for captioned TTS is approximate rather than
+provider-exact word alignment. Generation may be slow on CPU-only servers,
+especially with several clips and visual frames. Preserve the original
+footage and only clip videos you are authorized to use.
 
 ## What it does
 

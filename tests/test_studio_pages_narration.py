@@ -142,14 +142,28 @@ def test_narrated_job_records_script_and_voiceover(tmp_path, monkeypatch):
         {"start": 0, "duration": 30, "score": 2.0},
     ])
     monkeypatch.setattr(module, "require_voice_config", lambda: ("demo", "voice"))
-    monkeypatch.setattr(module, "build_script", lambda *_: "What a fascinating discovery.")
+    monkeypatch.setattr(
+        module, "build_storyboard",
+        lambda *_args, **_kwargs: {
+            "script": "What a fascinating discovery.",
+            "beats": [{"start": 0, "end": 30, "text": "What a fascinating discovery."}],
+            "analysis_basis": "speech_only",
+            "frame_samples": 0,
+        },
+    )
     def fake_voice(_script, path):
         path.write_bytes(b"some-narrator-audio")
         return path
-    monkeypatch.setattr(module, "synthesize", fake_voice)
+    monkeypatch.setattr(
+        module, "synthesize_timed_voice",
+        lambda story, folder, base, duration: (
+            fake_voice(story["script"], folder / (base + "-timed.m4a")),
+            story["beats"],
+        ),
+    )
     monkeypatch.setattr(module, "audio_duration", lambda _path: 5.0)
-    monkeypatch.setattr(module, "write_narration_captions",
-                        lambda _s, _d, _l, _style, path: path.write_text("captions") or True)
+    monkeypatch.setattr(module, "write_storyboard_captions",
+                        lambda _s, _d, _style, path: path.write_text("captions") or True)
     recorded = []
 
     def fake_render(_src, output, *_args, **kwargs):
@@ -165,7 +179,7 @@ def test_narrated_job_records_script_and_voiceover(tmp_path, monkeypatch):
     clip = job["clips"][0]
     assert clip["script"] == "What a fascinating discovery."
     assert clip["voiceover_added"] is True
-    assert recorded[0]["voiceover"].name.endswith(".mp3")
+    assert recorded[0]["voiceover"].name.endswith("-timed.m4a")
     assert recorded[0]["has_source_audio"] is True
     assert clip["captions_added"] is True
 

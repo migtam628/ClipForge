@@ -110,7 +110,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="v0.8.0-preview.${RUN_NUMBER}"
+          tag="v0.9.0-preview.${RUN_NUMBER}"
           gh release create "$tag" dist/* \
             --target "$SOURCE_SHA" \
             --title "ClipForge $tag" \

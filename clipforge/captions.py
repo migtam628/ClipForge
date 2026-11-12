@@ -26,12 +26,15 @@ def _safe(text: str) -> str:
 
 def write_captions(transcript: list[dict], start: float, duration: float,
                    style: str, path: Path) -> bool:
-    """Render 4-word phrases relative to the beginning of the clip."""
+    """Render up to 4 words per phrase, never crossing source beat boundaries."""
     if style not in STYLES:
         raise ValueError("Unsupported caption style")
-    words = [word for segment in transcript for word in segment.get("words", [])
-             if start <= word["start"] < start + duration]
-    if not words:
+    segments = [
+        [word for word in segment.get("words", [])
+         if start <= word["start"] < start + duration]
+        for segment in transcript
+    ]
+    if not any(segments):
         return False
     color, size, outline = STYLES[style]
     lines = [
@@ -46,44 +49,45 @@ def write_captions(transcript: list[dict], start: float, duration: float,
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    for idx in range(0, len(words), 4):
-        group = words[idx:idx + 4]
-        begin = max(0, group[0]["start"] - start)
-        end = min(duration, max(group[-1]["end"] - start, begin + 0.2))
-        if end <= begin:
-            continue
-        if style == "karaoke":
-            # Align the progressive highlight to Whisper word boundaries;
-            # subtitle duration and ASS tags are bounded to clip timestamps.
-            parts = []
-            cursor = group[0]["start"]
-            for word in group:
-                gap = max(0, word["start"] - cursor)
-                if gap > 0.02:
-                    parts.append(f"{{\\k{max(1, round(gap * 100))}}}")
-                span = max(0.01, min(word["end"], start + duration)
-                           - max(word["start"], start))
-                parts.append(
-                    f"{{\\kf{max(1, round(span * 100))}}}{_safe(word['text']).upper()} "
-                )
-                cursor = word["end"]
-            label = "".join(parts).strip()
-        elif style == "pop":
-            for word in group:
-                word_begin = max(0, word["start"] - start)
-                word_end = min(duration, max(word["end"] - start, word_begin + 0.12))
-                if word_end <= word_begin:
-                    continue
-                label = ("{\\fscx88\\fscy88\\t(0,140,\\fscx108\\fscy108)}"
-                         + _safe(word["text"]).upper())
-                lines.append(
-                    f"Dialogue: 0,{_ass_time(word_begin)},{_ass_time(word_end)},"
-                    f"Main,,0,0,0,,{label}"
-                )
-            continue
-        else:
-            label = " ".join(_safe(word["text"]) for word in group).upper()
-        lines.append(f"Dialogue: 0,{_ass_time(begin)},{_ass_time(end)},Main,,0,0,0,,{label}")
+    for words in segments:
+        for idx in range(0, len(words), 4):
+            group = words[idx:idx + 4]
+            begin = max(0, group[0]["start"] - start)
+            end = min(duration, max(group[-1]["end"] - start, begin + 0.2))
+            if end <= begin:
+                continue
+            if style == "karaoke":
+                # Align the progressive highlight to Whisper word boundaries;
+                # subtitle duration and ASS tags are bounded to clip timestamps.
+                parts = []
+                cursor = group[0]["start"]
+                for word in group:
+                    gap = max(0, word["start"] - cursor)
+                    if gap > 0.02:
+                        parts.append(f"{{\\k{max(1, round(gap * 100))}}}")
+                    span = max(0.01, min(word["end"], start + duration)
+                               - max(word["start"], start))
+                    parts.append(
+                        f"{{\\kf{max(1, round(span * 100))}}}{_safe(word['text']).upper()} "
+                    )
+                    cursor = word["end"]
+                label = "".join(parts).strip()
+            elif style == "pop":
+                for word in group:
+                    word_begin = max(0, word["start"] - start)
+                    word_end = min(duration, max(word["end"] - start, word_begin + 0.12))
+                    if word_end <= word_begin:
+                        continue
+                    label = ("{\\fscx88\\fscy88\\t(0,140,\\fscx108\\fscy108)}"
+                             + _safe(word["text"]).upper())
+                    lines.append(
+                        f"Dialogue: 0,{_ass_time(word_begin)},{_ass_time(word_end)},"
+                        f"Main,,0,0,0,,{label}"
+                    )
+                continue
+            else:
+                label = " ".join(_safe(word["text"]) for word in group).upper()
+            lines.append(f"Dialogue: 0,{_ass_time(begin)},{_ass_time(end)},Main,,0,0,0,,{label}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
 
@@ -155,3 +159,29 @@ def write_hook(title: str, duration: float, path: Path) -> bool:
     ]
     path.write_text("\n".join(script) + "\n", encoding="utf-8")
     return True
+
+
+
+def write_storyboard_captions(beats: list[dict], clip_seconds: float,
+                              style: str, path: Path) -> bool:
+    """Estimated timing of voiced beats, anchored to matching visual windows.
+
+    This deliberately does not claim ElevenLabs supplies word-aligned timestamps.
+    Voice segments are proportionally timed within their own beat, not spread
+    over the first seconds or artificially over the entire clip.
+    """
+    segments = []
+    for beat in beats:
+        words = str(beat.get("text", "")).split()
+        if not words:
+            continue
+        begin = max(0, float(beat["start"]))
+        duration = max(0.05, float(beat["end"]) - begin)
+        audible = min(duration, float(beat.get("playback_seconds", duration)))
+        step = audible / len(words)
+        segments.append({"words": [
+            {"start": round(begin + i * step, 3),
+             "end": round(min(clip_seconds, begin + (i + 1) * step), 3),
+             "text": word} for i, word in enumerate(words)
+        ]})
+    return write_captions(segments, 0, clip_seconds, style, path) if segments else False

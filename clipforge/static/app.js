@@ -51,9 +51,9 @@ function updateNarrationNotice() {
   const mode = $('narration').value;
   const note = $('narration-notice');
   if (mode === 'narrated') {
-    note.textContent = 'Voiceover uses ElevenLabs and may incur usage charges. Original audio will be quieter under the commentator. Configure a voice in Settings.';
+    note.textContent = 'Narration is written scene by scene through the full clip, then timed to each section. ElevenLabs can charge once per section. Original audio remains underneath.';
   } else if (mode === 'script') {
-    note.textContent = 'Generates a grounded AI script you can read or copy. It does not create voice audio.';
+    note.textContent = 'Writes a timestamped story throughout the selected clip. No paid voiceover is generated.';
   } else {
     note.textContent = 'Use original video audio. No AI script or external text-to-speech charge.';
   }
@@ -102,6 +102,7 @@ async function createJob() {
     narration: $('narration').value,
     narration_style: $('narration-style').value,
     narration_language: $('narration-language').value,
+    narration_basis: $('narration-basis').value,
     rights_confirmed: true
   };
   if (!Number.isInteger(options.max_clips) ||
@@ -242,6 +243,16 @@ function buildClipEditor(job, clip) {
   script.placeholder = 'Optional custom narration script';
   control('Commentator script (optional)', script);
 
+  const regenerate = el('label', 'clip-edit-consent');
+  const regenerateCheck = el('input');
+  regenerateCheck.type = 'checkbox';
+  regenerate.append(regenerateCheck, el('span', '',
+    'Regenerate timed narration based on this video segment (overrides the manual text above)'));
+  const basis = dropdown('Narration evidence', [
+    ['video', 'Video frames + speech (requires local vision model)'],
+    ['speech', 'Transcript only (no visual analysis)']
+  ], 'video');
+
   const voiceRow = el('label', 'clip-edit-consent');
   const voice = el('input');
   voice.type = 'checkbox';
@@ -262,7 +273,7 @@ function buildClipEditor(job, clip) {
   save.type = 'submit';
   if (['queued', 'rendering'].includes(clip.revision_state)) save.disabled = true;
   actions.append(save);
-  form.append(fields, voiceRow, approvalRow, explain, actions);
+  form.append(fields, regenerate, voiceRow, approvalRow, explain, actions);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -272,13 +283,16 @@ function buildClipEditor(job, clip) {
         span < 3 || span > 120 || begin < 0 ||
         begin + span > Number(job.duration || 0) + 0.05)
       return notify('Trim needs to fit within the original video (3–120 seconds).');
-    if (voice.checked && (!approval.checked || !script.value.trim()))
-      return notify('Enter a script and approve ElevenLabs usage to create a voiceover.');
+    if (voice.checked && (!approval.checked ||
+        (!script.value.trim() && !regenerateCheck.checked)))
+      return notify('Approve ElevenLabs usage and enter a script or enable video analysis.');
     const settings = {
       start: begin, duration: span, title: title.value.trim(),
       effect: effect.value, framing: framing.value,
       caption_style: captions.value, hook_style: hook.value,
       script: script.value.trim(), voiceover: voice.checked,
+      regenerate_storyboard: regenerateCheck.checked,
+      narration_basis: basis.value,
       voiceover_approved: approval.checked && voice.checked
     };
     save.disabled = true;
@@ -370,8 +384,27 @@ function card(job, mode = currentPage) {
         description.append(el('p', 'error', clip.revision_error || 'Clip revision failed. The previous version is still available.'));
       if (clip.script) {
         const scriptDetails = el('details', 'script-details');
-        const toggle = el('summary', '', 'Read AI commentary script');
-        const scriptText = el('p', 'script-copy', clip.script);
+        const toggle = el('summary', '', clip.storyboard?.length
+          ? 'Read timed video-grounded script' : 'Read AI commentary script');
+        const scriptText = el('div', 'script-copy');
+        if (clip.storyboard?.length) {
+          const basis = clip.analysis_basis === 'video_frames_and_speech'
+            ? 'Video frames + spoken content' : 'Spoken content only';
+          scriptText.append(el('p', 'script-basis', basis +
+            ' · review AI descriptions against the actual video.'));
+          for (const beat of clip.storyboard) {
+            const time = (n) => {
+              const seconds = Math.round(n);
+              return String(Math.floor(seconds / 60)).padStart(2, '0') +
+                ':' + String(seconds % 60).padStart(2, '0');
+            };
+            const row = el('div', 'script-beat');
+            row.append(el('strong', 'script-beat-time',
+              time(beat.start) + '–' + time(beat.end)),
+              el('span', '', beat.text || '[No reliable narration evidence]'));
+            scriptText.append(row);
+          }
+        } else scriptText.textContent = clip.script;
         const copyButton = el('button', 'small-action', 'Copy script');
         copyButton.type = 'button';
         copyButton.addEventListener('click', () => {
@@ -771,6 +804,7 @@ const settingsIds = {
   narration: 'narration',
   narration_style: 'narration-style',
   narration_language: 'narration-language',
+  narration_basis: 'narration-basis',
 };
 
 function applyDefaults(defaults, prefix) {
@@ -800,6 +834,11 @@ async function loadSettings() {
         ? 'AI: Whisper + ' + settings.ai.model + '. Local scoring can take longer on CPU-only servers.'
         : 'AI is not fully configured. You can still use Audio-energy selection.';
       updateNarrationNotice();
+      if (settings.vision && $('narration-basis').value === 'video') {
+        $('narration-notice').textContent +=
+          ' For visual analysis, install local Ollama model ' +
+          settings.vision.model + ' before generating clips.';
+      }
       if (!settings.narration.elevenlabs_configured) {
         $('narration-notice').textContent +=
           ' ElevenLabs is not connected; choose script-only or configure it in Settings.';
@@ -818,6 +857,10 @@ async function loadSettings() {
           : yt.status === 'invalid'
             ? 'Cookie file detected but invalid or unreadable. Check Netscape format and UID 10001 permissions.'
             : 'No private YouTube cookie file detected. URL downloads may require verification.';
+      $('settings-vision-status').textContent =
+        'Local visual model: ' + (settings.vision?.model || 'not configured') +
+        '. Video analysis samples frames at multiple timestamps. ' +
+        'Model installation is checked when generating a clip.';
       $('settings-voice-status').textContent =
         settings.narration.elevenlabs_configured
           ? 'ElevenLabs voiceover is configured on this server.'
