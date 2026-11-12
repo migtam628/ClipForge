@@ -11,6 +11,24 @@ const labels = {studio: 'Studio', library: 'Clip Library',
   publishing: 'Publishing', analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
 $('page-crumb').textContent = labels[currentPage];
 document.title = 'ClipForge · ' + labels[currentPage];
+
+// Read the running backend version so this label never goes stale between releases.
+async function displayAppVersion() {
+  const label = $('app-version');
+  if (!label) return;
+  try {
+    const response = await fetch('/api/health', {cache: 'no-store'});
+    if (!response.ok) throw new Error('Version check failed');
+    const health = await response.json();
+    if (typeof health.version !== 'string' || !health.version.trim()) {
+      throw new Error('Missing app version');
+    }
+    label.textContent = `v${health.version} preview`;
+  } catch {
+    label.textContent = 'Version unavailable';
+  }
+}
+displayAppVersion();
 for (const page of validPages) {
   $('view-' + page).hidden = page !== currentPage;
 }
