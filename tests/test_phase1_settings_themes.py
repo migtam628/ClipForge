@@ -94,6 +94,10 @@ def test_host_env_update_is_atomic_revision_checked_and_masked(tmp_path):
     with pytest.raises(ValueError, match="Environment changed"):
         update_env(path, {"CLIPFORGE_AI_MODEL": "bad"}, revision)
     assert path.read_text().count("CLIPFORGE_AI_MODEL=") == 1
+    from clipforge.environment import restore_env_revision
+    assert restore_env_revision(path, revision) == revision
+    assert read_env(path)["CLIPFORGE_ELEVENLABS_API_KEY"] == "very-sensitive"
+    assert read_env(path)["CLIPFORGE_AI_MODEL"] == "old-model"
 
 
 def test_admin_routes_fail_closed_before_password_setup(monkeypatch):
