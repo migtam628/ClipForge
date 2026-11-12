@@ -435,6 +435,54 @@ function card(job, mode = currentPage) {
         description.append(buildClipEditor(job, clip));
       }
       if (job.status === 'completed' && mode === 'publishing') {
+        const copyDraft = clip.post_copy;
+        const draftLine = (copy) => [
+          copy.description || '', (copy.hashtags || []).join(' ')
+        ].filter(Boolean).join('\n\n');
+        const copyButton = el('button', 'small-action', '✦ Draft post copy from video');
+        copyButton.type = 'button';
+        copyButton.disabled = ['queued', 'generating'].includes(clip.post_copy_state);
+        copyButton.addEventListener('click', async () => {
+          copyButton.disabled = true;
+          try {
+            const response = await fetch(
+              '/api/jobs/' + job.id + '/clips/' + clip.number + '/post-copy',
+              {method: 'POST'}
+            );
+            const data = await response.json();
+            if (!response.ok) throw new Error(
+              typeof data.detail === 'string' ? data.detail : 'Could not start AI post draft');
+            notify('Local AI is preparing a title and description. Refresh Publishing to review.');
+            await refresh();
+          } catch (error) {
+            notify(error.message);
+            copyButton.disabled = false;
+          }
+        });
+        description.append(copyButton);
+        if (clip.post_copy_state === 'queued' ||
+            clip.post_copy_state === 'generating')
+          description.append(el('p', 'helper-note',
+            'Local AI is preparing publishing copy from the selected clip…'));
+        if (clip.post_copy_state === 'failed')
+          description.append(el('p', 'error',
+            clip.post_copy_error || 'Local publishing copy generation failed'));
+        if (copyDraft) {
+          const draftBox = el('div', 'post-copy-suggestion');
+          draftBox.append(el('strong', '', 'AI post draft · review and edit'));
+          draftBox.append(el('p', '', copyDraft.title));
+          draftBox.append(el('p', '', draftLine(copyDraft)));
+          const copyAction = el('button', 'small-action', 'Copy draft text');
+          copyAction.type = 'button';
+          copyAction.addEventListener('click', () => {
+            navigator.clipboard.writeText(
+              copyDraft.title + '\n\n' + draftLine(copyDraft)
+            ).then(() => notify('Publishing draft copied.'))
+              .catch(() => notify('Copy unavailable in this browser.'));
+          });
+          draftBox.append(copyAction);
+          description.append(draftBox);
+        }
         const available = platforms.filter((p) => p.configured);
         if (available.length) {
           const publishButton = el('button', 'publish-button', '↗ Send to social platform');
@@ -448,12 +496,13 @@ function card(job, mode = currentPage) {
           }
           const titleField = el('input');
           titleField.maxLength = 100;
-          titleField.value = clip.title || `Clip ${clip.number}`;
+          titleField.value = copyDraft?.title || clip.title || `Clip ${clip.number}`;
           titleField.placeholder = 'Post title';
           const captionField = el('textarea');
           captionField.maxLength = 2200;
           captionField.rows = 2;
           captionField.placeholder = 'Description / hashtags (optional)';
+          captionField.value = copyDraft ? draftLine(copyDraft) : '';
           const visibility = el('select');
           for (const v of ['private', 'unlisted', 'public']) {
             const opt = el('option', '', `YouTube: ${v}`);
@@ -513,13 +562,14 @@ function card(job, mode = currentPage) {
           }
           const scheduledTitle = el('input');
           scheduledTitle.maxLength = 100;
-          scheduledTitle.value = clip.title || 'Clip ' + clip.number;
+          scheduledTitle.value = copyDraft?.title || clip.title || 'Clip ' + clip.number;
           scheduledTitle.placeholder = 'Publication title';
 
           const scheduledDescription = el('textarea');
           scheduledDescription.rows = 2;
           scheduledDescription.maxLength = 2200;
           scheduledDescription.placeholder = 'Optional description / hashtags';
+          scheduledDescription.value = copyDraft ? draftLine(copyDraft) : '';
           const scheduledVisibility = el('select');
           for (const v of ['private', 'unlisted', 'public']) {
             const option = el('option', '', 'YouTube: ' + v);
