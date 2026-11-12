@@ -1,5 +1,6 @@
 """Phase 1 appearance, admin access, and host environment safety checks."""
 import hashlib
+import threading
 
 import pytest
 from argon2 import PasswordHasher
@@ -147,3 +148,39 @@ def test_authentication_csrf_and_no_direct_browser_secrets(monkeypatch):
     assert client.post("/api/admin/logout", headers={
         "x-clipforge-csrf": csrf}).status_code == 200
     assert client.get("/api/admin/environment").status_code == 401
+
+
+def test_unix_agent_writes_real_host_env_and_masks_secrets(tmp_path, monkeypatch):
+    from clipforge.config_agent import Server, request_agent
+
+    private = tmp_path / "private-auth"
+    private.mkdir()
+    (private / "config-agent.token").write_text("test-agent-token\n")
+    path = tmp_path / ".env"
+    path.write_text("CLIPFORGE_AI_MODEL=old-model\n"
+                    "CLIPFORGE_ELEVENLABS_API_KEY=secret-old\n")
+    socket_path = private / "config-agent.sock"
+    monkeypatch.setenv("CLIPFORGE_CONFIG_AGENT_DIR", str(private))
+    server = Server(socket_path, path, "test-agent-token")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        snapshot = request_agent("read")
+        assert snapshot["ok"]
+        assert "secret-old" not in str(snapshot)
+        revision = snapshot["data"]["revision"]
+        updated = request_agent("update", {
+            "revision": revision,
+            "changes": {"CLIPFORGE_ELEVENLABS_API_KEY": "secret-new",
+                        "CLIPFORGE_AI_MODEL": "new-model"},
+        })
+        assert updated["ok"]
+        assert updated["data"]["pending_apply"]
+        assert "secret-new" not in str(updated)
+        assert read_env(path)["CLIPFORGE_ELEVENLABS_API_KEY"] == "secret-new"
+        assert read_env(path)["CLIPFORGE_AI_MODEL"] == "new-model"
+        assert "secret-new" not in str(request_agent("read"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
