@@ -144,6 +144,37 @@ def _exclusive_lock(path: Path):
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
+def _archive_encrypted(path: Path, original: bytes, revision: str) -> None:
+    """Store encrypted pre-update snapshot; never leave plaintext copies."""
+    from cryptography.fernet import Fernet
+
+    keyfile = path.parent / ".clipforge-env-archive.key"
+    archive = path.parent / ".clipforge-env-archive"
+    if keyfile.is_symlink() or archive.is_symlink():
+        raise ValueError("Refusing symlink in environment backup storage")
+    if not keyfile.exists():
+        try:
+            fd = os.open(keyfile, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(Fernet.generate_key())
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError:
+            pass
+    key = keyfile.read_bytes().strip()
+    archive.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(archive, 0o700)
+    backup = archive / (revision + ".enc")
+    if backup.exists():
+        return
+    encrypted = Fernet(key).encrypt(original)
+    fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(encrypted)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def update_env(path: Path, changes: dict[str, str], expected_revision: str) -> str:
     """Atomic, symlink-safe .env patch. Caller must authenticate and authorize."""
     changes = validate_patch(changes)
@@ -179,6 +210,7 @@ def update_env(path: Path, changes: dict[str, str], expected_revision: str) -> s
         # Do not persist a backup containing secret material in plaintext.
         # A controlled encrypted rollback store will be added before automatic Apply.
         data = "".join(updated).encode("utf-8")
+        _archive_encrypted(path, original, revision)
         fd, temp = tempfile.mkstemp(prefix=".clipforge-env-", dir=path.parent)
         try:
             os.fchmod(fd, 0o600)
