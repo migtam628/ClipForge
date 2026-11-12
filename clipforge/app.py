@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
 from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
-from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.captions import (
     write_brand_sticker,
     write_captions,
@@ -33,6 +32,7 @@ from clipforge.captions import (
     write_narration_captions,
     write_storyboard_captions,
 )
+from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.engine import (
     audio_energy,
     download_video,

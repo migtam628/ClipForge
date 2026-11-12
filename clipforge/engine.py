@@ -77,9 +77,6 @@ def probe(path: Path) -> dict:
 
 def audio_energy(path: Path, duration: float, sample_rate: int = 4000) -> list[float]:
     """RMS amplitude in roughly 2-second buckets. Not semantic AI scoring."""
-    if brand is not None:
-        safe_brand = str(brand).replace("\\", "\\\\").replace(":", "\\:")
-        vf += ",ass=" + safe_brand
     args = [
         "ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar",
         str(sample_rate), "-f", "s16le", "pipe:1",
@@ -212,6 +209,9 @@ def render_clip(
     if hook is not None:
         safe_hook = str(hook).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_hook
+    if brand is not None:
+        safe_brand = str(brand).replace("\\", "\\\\").replace(":", "\\:")
+        vf += ",ass=" + safe_brand
     args = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
         str(start), "-i", str(source),
