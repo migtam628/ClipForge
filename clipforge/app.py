@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
 from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
+from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.captions import (
     write_captions,
     write_hook,
@@ -105,6 +106,30 @@ class Options(BaseModel):
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
     narration_language: Literal["en", "es"] = "en"
     narration_basis: Literal["video", "speech"] = "speech"
+    clip_focus: str = Field(default="", max_length=400)
+    content_niche: Literal[
+        "general", "podcast", "gaming", "education", "comedy",
+        "travel", "sports", "business", "music", "news",
+    ] = "general"
+    use_voice_markers: bool = True
+    brand_text: str = Field(default="", max_length=36)
+
+
+class CreatorProfile(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    content_niche: Literal[
+        "general", "podcast", "gaming", "education", "comedy",
+        "travel", "sports", "business", "music", "news",
+    ] = "general"
+    clip_focus: str = Field(default="", max_length=400)
+    caption_style: Literal[
+        "none", "classic", "bold", "neon", "karaoke", "pop",
+    ] = "karaoke"
+    framing: Literal["pad", "crop", "smart", "blur"] = "smart"
+    effect: Literal["none", "pop", "cinema", "noir"] = "pop"
+    hook_style: Literal["none", "headline"] = "headline"
+    use_voice_markers: bool = True
+    brand_text: str = Field(default="", max_length=36)
 
 
 class UrlRequest(Options):
@@ -325,6 +350,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 candidates = select_ai_highlights(
                     transcript, info["duration"], opts.clip_seconds, opts.max_clips,
                     energy, folder / "ai-scores.json",
+                    opts.clip_focus, opts.content_niche, opts.use_voice_markers,
                 )
             else:
                 candidates = select_highlights(
@@ -445,6 +471,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "storyboard": storyboard["beats"] if storyboard else [],
                     "analysis_basis": storyboard["analysis_basis"] if storyboard else None,
                     "frame_samples": storyboard["frame_samples"] if storyboard else 0,
+                    "creator_focus": opts.clip_focus,
+                    "creator_niche": opts.content_niche,
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
                     "face_tracking": smart_track is not None,
@@ -641,6 +669,10 @@ async def submit_upload_batch(
     narration_style: str = Form("energetic"),
     narration_language: str = Form("en"),
     narration_basis: str = Form("speech"),
+    clip_focus: str = Form(""),
+    content_niche: str = Form("general"),
+    use_voice_markers: bool = Form(True),
+    brand_text: str = Form(""),
     rights_confirmed: bool = Form(False),
     voice_spend_approved: bool = Form(False),
 ):
@@ -655,6 +687,8 @@ async def submit_upload_batch(
             framing=framing, hook_style=hook_style,
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
+            clip_focus=clip_focus, content_niche=content_niche,
+            use_voice_markers=use_voice_markers, brand_text=brand_text,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -756,6 +790,85 @@ async def submit_upload(
         await file.close()
     POOL.submit(_process, folder, dest, None)
     return {"id": job_id, "status": "queued"}
+
+
+@app.get("/api/creator/profiles")
+def list_creator_profiles():
+    items = load_json(DATA_DIR / "creator-profiles.json")
+    return items if isinstance(items, list) else []
+
+
+@app.put("/api/creator/profiles")
+def save_creator_profile(profile: CreatorProfile):
+    """Save local, non-secret channel preferences; no external account access."""
+    with LOCK:
+        records = list_creator_profiles()
+        records = [row for row in records if row.get("name") != profile.name]
+        if len(records) >= 12:
+            raise HTTPException(429, "Maximum 12 saved creator profiles")
+        entry = profile.model_dump()
+        if entry["content_niche"] not in NICHES:
+            raise HTTPException(422, "Unsupported creator niche")
+        records.append(entry)
+        save_json(DATA_DIR / "creator-profiles.json", records)
+    return entry
+
+
+def _post_copy_worker(folder: Path, number: int) -> None:
+    """Generate an optional reviewable publishing draft with local Ollama."""
+    try:
+        with LOCK:
+            job = _read(folder)
+            clip = next(c for c in job["clips"] if c["number"] == number)
+            clip["post_copy_state"] = "generating"
+            _write(folder, job)
+        transcript = load_json(folder / "transcript.json")
+        if not isinstance(transcript, list):
+            transcript = []
+        opts = Options(**job["options"])
+        draft = suggest_post_copy(
+            clip, transcript, opts.content_niche, opts.narration_language,
+            folder / f"post-copy-{number:03d}.json",
+        )
+        with LOCK:
+            latest = _read(folder)
+            target = next(c for c in latest["clips"] if c["number"] == number)
+            target.update(
+                post_copy=draft, post_copy_state="completed", post_copy_error=None,
+            )
+            _write(folder, latest)
+    except Exception as exc:
+        LOGGER.exception("Clip publishing draft generation failed")
+        with LOCK:
+            try:
+                job = _read(folder)
+                clip = next(c for c in job["clips"] if c["number"] == number)
+                clip.update(post_copy_state="failed",
+                            post_copy_error=f"{type(exc).__name__}: {str(exc)[:260]}")
+                _write(folder, job)
+            except (OSError, ValueError, StopIteration):
+                pass
+
+
+@app.post("/api/jobs/{job_id}/clips/{number}/post-copy", status_code=202)
+def request_post_copy(job_id: str, number: int):
+    """Never publish; only prepare a human-reviewable suggested caption."""
+    folder = job_folder(job_id)
+    with LOCK:
+        job = _read(folder)
+        if job["status"] != "completed":
+            raise HTTPException(409, "Complete rendering before preparing post copy")
+        clip = next((c for c in job["clips"] if c.get("number") == number), None)
+        if clip is None:
+            raise HTTPException(404, "Clip not found")
+        if clip.get("post_copy_state") in {"queued", "generating"}:
+            raise HTTPException(409, "Publishing copy generation is already in progress")
+        if clip.get("revision_state") in {"queued", "rendering"}:
+            raise HTTPException(409, "Finish the clip revision before writing post copy")
+        clip.update(post_copy_state="queued", post_copy_error=None)
+        _write(folder, job)
+    POOL.submit(_post_copy_worker, folder, number)
+    return {"job_id": job_id, "clip": number, "status": "queued"}
 
 
 @app.get("/api/jobs")
@@ -952,6 +1065,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 storyboard=(storyboard["beats"] if storyboard else []),
                 analysis_basis=(storyboard["analysis_basis"] if storyboard else "manual"),
                 frame_samples=(storyboard["frame_samples"] if storyboard else 0),
+                post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
                 revision_request=None,
