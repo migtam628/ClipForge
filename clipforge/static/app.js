@@ -3,11 +3,11 @@ let activeTab = 'url';
 let polling = false;
 let platforms = [];
 let publishingPresets = [];
-const validPages = ['studio', 'library', 'publishing', 'activity', 'settings'];
+const validPages = ['studio', 'library', 'publishing', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
 const labels = {studio: 'Studio', library: 'Clip Library',
-  publishing: 'Publishing', activity: 'Activity', settings: 'Settings'};
+  publishing: 'Publishing', analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
 $('page-crumb').textContent = labels[currentPage];
 document.title = 'ClipForge · ' + labels[currentPage];
 for (const page of validPages) {

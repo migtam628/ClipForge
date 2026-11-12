@@ -13,16 +13,18 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
+from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
 from clipforge.captions import write_captions, write_hook, write_narration_captions
 from clipforge.engine import (
     audio_energy,
@@ -123,6 +125,29 @@ class ClipEditRequest(BaseModel):
     script: str = Field(default="", max_length=1200)
     voiceover: bool = False
     voiceover_approved: bool = False
+
+
+class AnalyticsEntryRequest(BaseModel):
+    platform: Literal[
+        "youtube", "instagram", "facebook", "tiktok", "x",
+        "threads", "snapchat", "other",
+    ]
+    post_url: str = Field(default="", max_length=700)
+    job_id: str = Field(default="", max_length=32)
+    filename: str = Field(default="", max_length=90)
+    views: int = Field(default=0, ge=0, le=2_000_000_000)
+    likes: int = Field(default=0, ge=0, le=2_000_000_000)
+    comments: int = Field(default=0, ge=0, le=2_000_000_000)
+    shares: int = Field(default=0, ge=0, le=2_000_000_000)
+    saves: int = Field(default=0, ge=0, le=2_000_000_000)
+    earnings_usd: Decimal = Field(default=Decimal("0.00"), ge=0,
+                                   max_digits=12, decimal_places=2)
+    campaign_name: str = Field(default="", max_length=100)
+    campaign_status: Literal[
+        "none", "submitted", "approved", "rejected", "paid",
+    ] = "none"
+    evidence_url: str = Field(default="", max_length=700)
+    notes: str = Field(default="", max_length=500)
 
 
 class ScheduledPublishRequest(BaseModel):
@@ -461,6 +486,7 @@ def recover_interrupted_jobs() -> None:
 @app.get("/library")
 @app.get("/publishing")
 @app.get("/activity")
+@app.get("/analytics")
 @app.get("/settings")
 def index():
     """Distinct navigable pages share one UI shell and static assets."""
@@ -1210,6 +1236,95 @@ def publish_clip(job_id: str, body: PublishRequest):
         body.title, body.description, body.visibility,
     )
     return {"id": pub_id, "state": "queued"}
+
+
+def _analytics_records() -> list[dict]:
+    data = load_json(DATA_DIR / "analytics.json")
+    return data if isinstance(data, list) else []
+
+
+@app.post("/api/analytics/records", status_code=201)
+def add_analytics_record(entry: AnalyticsEntryRequest):
+    """Record a MANUAL metric snapshot, never claim provider-verified data."""
+    if entry.platform not in PLATFORMS:
+        raise HTTPException(422, "Unknown performance platform")
+    if entry.post_url and not valid_https_url(entry.post_url):
+        raise HTTPException(422, "Post URL must use HTTPS without credentials")
+    if entry.evidence_url and not valid_https_url(entry.evidence_url):
+        raise HTTPException(422, "Evidence URL must use HTTPS without credentials")
+    if not entry.post_url and not (entry.job_id and entry.filename):
+        raise HTTPException(422, "Provide an HTTPS post URL or a saved job and clip")
+    if entry.job_id or entry.filename:
+        if not entry.job_id or not entry.filename:
+            raise HTTPException(422, "A job ID and filename must be supplied together")
+        folder = job_folder(entry.job_id)
+        job = _read(folder)
+        valid_files = {clip["filename"] for clip in job.get("clips", [])}
+        for clip in job.get("clips", []):
+            valid_files.update(
+                old.get("filename") for old in clip.get("revision_history", [])
+            )
+        if entry.filename not in valid_files:
+            raise HTTPException(404, "Clip does not belong to this job")
+    row = {
+        **entry.model_dump(exclude={"earnings_usd"}),
+        "earnings_usd": f"{entry.earnings_usd:.2f}",
+        "id": uuid.uuid4().hex,
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "source": "self_reported_manual",
+        "post_key": post_key(
+            entry.platform, entry.post_url, entry.job_id, entry.filename,
+        ),
+    }
+    with LOCK:
+        records = _analytics_records()
+        if len(records) >= 5000:
+            raise HTTPException(429, "Maximum 5,000 metric snapshots; export before archiving")
+        records.append(row)
+        save_json(DATA_DIR / "analytics.json", records)
+    return row
+
+
+@app.get("/api/analytics/records")
+def analytics_records():
+    return _analytics_records()[-200:][::-1]
+
+
+@app.get("/api/analytics/summary")
+def analytics_summary():
+    publication_states = {}
+    for file in DATA_DIR.glob("*/job.json"):
+        try:
+            job = _read(file.parent)
+            for pub in job.get("publications", []):
+                status = pub.get("state", "unknown")
+                publication_states[status] = publication_states.get(status, 0) + 1
+        except (OSError, ValueError, KeyError):
+            continue
+    return summarize(_analytics_records(), publication_states)
+
+
+@app.get("/api/analytics/export")
+def export_analytics():
+    """Export all manually entered snapshots, with CSV formula safeguards."""
+    text = safe_csv(_analytics_records())
+    return Response(
+        content=text.encode("utf-8-sig"), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="clipforge-analytics.csv"'},
+    )
+
+
+@app.delete("/api/analytics/records/{record_id}", status_code=204)
+def delete_analytics_record(record_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", record_id):
+        raise HTTPException(404, "Metric snapshot not found")
+    with LOCK:
+        rows = _analytics_records()
+        kept = [row for row in rows if row.get("id") != record_id]
+        if len(kept) == len(rows):
+            raise HTTPException(404, "Metric snapshot not found")
+        save_json(DATA_DIR / "analytics.json", kept)
+    return Response(status_code=204)
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
