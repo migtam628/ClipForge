@@ -162,6 +162,7 @@ def render_clip(
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
     voiceover: Path | None = None, has_source_audio: bool = True,
     hook: Path | None = None, smart_track: Path | None = None,
+    brand: Path | None = None,
 ) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
@@ -208,6 +209,9 @@ def render_clip(
     if hook is not None:
         safe_hook = str(hook).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_hook
+    if brand is not None:
+        safe_brand = str(brand).replace("\\", "\\\\").replace(":", "\\:")
+        vf += ",ass=" + safe_brand
     args = [
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin", "-ss",
         str(start), "-i", str(source),
