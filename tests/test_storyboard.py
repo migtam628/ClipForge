@@ -156,6 +156,7 @@ def test_timed_voice_assembly_and_captions_reach_last_scene(tmp_path, monkeypatc
 
 def test_settings_exposes_vision_without_secret(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
+
     from clipforge import app as module
 
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
