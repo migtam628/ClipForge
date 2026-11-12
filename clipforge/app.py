@@ -25,7 +25,9 @@ from pydantic import BaseModel, Field
 from clipforge import __version__
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
 from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
-from clipforge.captions import write_captions, write_hook, write_narration_captions
+from clipforge.captions import (
+    write_captions, write_hook, write_narration_captions, write_storyboard_captions,
+)
 from clipforge.engine import (
     audio_energy,
     download_video,
@@ -46,6 +48,7 @@ from clipforge.narration import (
 from clipforge.publishing import platform_status, publish
 from clipforge.recovery import load_json, recover_source, save_json
 from clipforge.smart_frame import plan_face_tracking
+from clipforge.storyboard import build_storyboard, synthesize_timed_voice, vision_status
 
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -99,6 +102,7 @@ class Options(BaseModel):
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
     narration_language: Literal["en", "es"] = "en"
+    narration_basis: Literal["video", "speech"] = "speech"
 
 
 class UrlRequest(Options):
@@ -123,6 +127,8 @@ class ClipEditRequest(BaseModel):
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
+    regenerate_storyboard: bool = False
+    narration_basis: Literal["video", "speech"] = "video"
     voiceover: bool = False
     voiceover_approved: bool = False
 
@@ -286,16 +292,26 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
         if (opts.selection_mode == "ai" or opts.caption_style != "none"
                 or opts.narration != "none"):
             if not info["has_audio"]:
-                raise RuntimeError("Speech transcription needs a video with audio")
-            _stage(folder, "transcribing", 12)
-            saved_transcript = load_json(folder / "transcript.json")
-            if isinstance(saved_transcript, list):
-                transcript = saved_transcript
-                LOGGER.info("Reused transcription for ClipForge job %s", folder.name)
+                visual_only = (opts.narration != "none"
+                               and opts.narration_basis == "video"
+                               and opts.selection_mode == "energy"
+                               and (opts.caption_style == "none"
+                                    or opts.narration == "narrated"))
+                if not visual_only:
+                    raise RuntimeError(
+                        "Speech-based features need audio. For silent footage choose "
+                        "Audio-energy selection and video-aware narration."
+                    )
             else:
-                LOGGER.info("Transcribing ClipForge job %s", folder.name)
-                transcript = transcribe(source_path, DATA_DIR / "models")
-                save_json(folder / "transcript.json", transcript)
+                _stage(folder, "transcribing", 12)
+                saved_transcript = load_json(folder / "transcript.json")
+                if isinstance(saved_transcript, list):
+                    transcript = saved_transcript
+                    LOGGER.info("Reused transcription for ClipForge job %s", folder.name)
+                else:
+                    LOGGER.info("Transcribing ClipForge job %s", folder.name)
+                    transcript = transcribe(source_path, DATA_DIR / "models")
+                    save_json(folder / "transcript.json", transcript)
 
         candidates = load_json(folder / "candidates.json")
         if not isinstance(candidates, list) or not candidates or not all(
@@ -358,25 +374,30 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
             else:
                 script = None
                 voiceover = None
+                storyboard = None
+                timed_beats = None
                 if opts.narration != "none":
                     narration_dir = folder / "narration"
                     narration_dir.mkdir(exist_ok=True)
-                    script = build_script(
+                    storyboard = build_storyboard(
                         transcript, candidate["start"], candidate["duration"],
                         opts.narration_style, opts.narration_language,
-                        narration_dir / f"clip-{index:03d}.json",
+                        narration_dir / f"clip-{index:03d}-story.json",
+                        source=source_path,
+                        basis="video" if opts.narration_basis == "video" else "transcript",
                     )
+                    script = storyboard["script"]
                     if opts.narration == "narrated":
-                        voiceover = synthesize(
-                            script, narration_dir / f"clip-{index:03d}.mp3",
+                        voiceover, timed_beats = synthesize_timed_voice(
+                            storyboard, narration_dir,
+                            f"clip-{index:03d}", candidate["duration"],
                         )
                 subtitles = None
                 if opts.caption_style != "none":
                     ass = output / f"clip-{index:03d}.ass"
                     if voiceover is not None:
-                        added = write_narration_captions(
-                            script, audio_duration(voiceover),
-                            candidate["duration"], opts.caption_style, ass,
+                        added = write_storyboard_captions(
+                            timed_beats, candidate["duration"], opts.caption_style, ass,
                         )
                     else:
                         added = write_captions(
@@ -419,6 +440,9 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "captions_added": subtitles is not None, "effect": opts.effect,
                     "framing": opts.framing, "narration": opts.narration,
                     "script": script, "voiceover_added": voiceover is not None,
+                    "storyboard": storyboard["beats"] if storyboard else [],
+                    "analysis_basis": storyboard["analysis_basis"] if storyboard else None,
+                    "frame_samples": storyboard["frame_samples"] if storyboard else 0,
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
                     "face_tracking": smart_track is not None,
@@ -515,6 +539,7 @@ def get_settings():
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
             selection_mode="ai", caption_style="karaoke", effect="pop",
             framing="smart", max_clips=5, hook_style="headline",
+            narration_basis="video",
         )
     except ValueError:
         defaults = Options()
@@ -522,6 +547,7 @@ def get_settings():
         "defaults": defaults.model_dump(),
         "ai": ai_capabilities(),
         "narration": narration_status(),
+        "vision": vision_status(),
         "youtube_import": youtube_cookie_status(),
     }
 
@@ -815,20 +841,46 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
 
         voiceover = None
         subtitles = None
-        if edit.voiceover:
-            if not edit.voiceover_approved or not edit.script.strip():
-                raise ValueError("Voiceover requires a script and explicit API-charge approval")
-            require_voice_config()
-            narration_dir = folder / "narration"
+        storyboard = None
+        timed_beats = None
+        narration_dir = folder / "narration"
+        if edit.regenerate_storyboard:
             narration_dir.mkdir(exist_ok=True)
-            voiceover = synthesize(edit.script.strip(), narration_dir / f"{base}.mp3")
+            settings = Options(**job["options"])
+            transcript = load_json(folder / "transcript.json")
+            if not isinstance(transcript, list):
+                transcript = transcribe(source, DATA_DIR / "models") if info["has_audio"] else []
+                save_json(folder / "transcript.json", transcript)
+            storyboard = build_storyboard(
+                transcript, edit.start, edit.duration,
+                settings.narration_style, settings.narration_language,
+                narration_dir / f"{base}-story.json",
+                source=source,
+                basis="video" if edit.narration_basis == "video" else "transcript",
+            )
+        if edit.voiceover:
+            if not edit.voiceover_approved or not (edit.script.strip() or storyboard):
+                raise ValueError("Voiceover requires approved charges and a script")
+            require_voice_config()
+            narration_dir.mkdir(exist_ok=True)
+            if storyboard:
+                voiceover, timed_beats = synthesize_timed_voice(
+                    storyboard, narration_dir, base, edit.duration,
+                )
+            else:
+                voiceover = synthesize(edit.script.strip(), narration_dir / f"{base}.mp3")
         if edit.caption_style != "none":
             ass = output / f"{base}.ass"
             if voiceover is not None:
-                added = write_narration_captions(
-                    edit.script, audio_duration(voiceover),
-                    edit.duration, edit.caption_style, ass,
-                )
+                if timed_beats is not None:
+                    added = write_storyboard_captions(
+                        timed_beats, edit.duration, edit.caption_style, ass,
+                    )
+                else:
+                    added = write_narration_captions(
+                        edit.script, audio_duration(voiceover),
+                        edit.duration, edit.caption_style, ass,
+                    )
             else:
                 transcript = load_json(folder / "transcript.json")
                 if not isinstance(transcript, list):
@@ -879,7 +931,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 key: target.get(key) for key in (
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
-                    "hook_style", "script",
+                    "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                 )
             })
             target.update(
@@ -892,7 +944,10 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 voiceover_added=voiceover is not None,
                 face_tracking=smart_track is not None,
                 narration="narrated" if voiceover else ("script" if edit.script.strip() else "none"),
-                script=edit.script.strip() or None,
+                script=(storyboard["script"] if storyboard else edit.script.strip() or None),
+                storyboard=(storyboard["beats"] if storyboard else []),
+                analysis_basis=(storyboard["analysis_basis"] if storyboard else "manual"),
+                frame_samples=(storyboard["frame_samples"] if storyboard else 0),
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
                 revision_request=None,
@@ -937,8 +992,13 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
             raise HTTPException(429, "Maximum 20 revisions per clip")
         if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
             raise HTTPException(422, "Trim must fit inside the original video's duration")
-        if body.voiceover and (not body.voiceover_approved or not body.script.strip()):
-            raise HTTPException(400, "Explicit approval and a script are required for paid TTS")
+        if body.voiceover and (
+            not body.voiceover_approved or
+            not (body.script.strip() or body.regenerate_storyboard)
+        ):
+            raise HTTPException(
+                400, "Explicit TTS approval and a script or storyboard are required"
+            )
         if body.voiceover:
             try:
                 require_voice_config()
