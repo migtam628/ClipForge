@@ -3,6 +3,7 @@ let activeTab = 'url';
 let polling = false;
 let platforms = [];
 let publishingPresets = [];
+let creatorProfiles = [];
 const validPages = ['studio', 'library', 'publishing', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
@@ -22,6 +23,8 @@ for (const item of document.querySelectorAll('.nav-link[data-page]')) {
 $('url-tab').addEventListener('click', () => toggleTab('url'));
 $('upload-tab').addEventListener('click', () => toggleTab('upload'));
 $('create-button').addEventListener('click', createJob);
+$('save-creator-profile').addEventListener('click', saveCreatorProfile);
+$('creator-profile-select').addEventListener('change', applyCreatorProfile);
 for (const button of document.querySelectorAll('[data-refresh]')) {
   button.addEventListener('click', refresh);
 }
@@ -103,6 +106,10 @@ async function createJob() {
     narration_style: $('narration-style').value,
     narration_language: $('narration-language').value,
     narration_basis: $('narration-basis').value,
+    content_niche: $('content-niche').value,
+    clip_focus: $('clip-focus').value.trim(),
+    use_voice_markers: $('use-voice-markers').checked,
+    brand_text: $('brand-text').value.trim(),
     rights_confirmed: true
   };
   if (!Number.isInteger(options.max_clips) ||
@@ -236,6 +243,12 @@ function buildClipEditor(job, clip) {
     ['headline', 'Show first 3 seconds'], ['none', 'No headline']
   ], clip.hook_style || 'none');
 
+  const brandText = el('input');
+  brandText.maxLength = 36;
+  brandText.value = clip.brand_text || '';
+  brandText.placeholder = 'Optional channel text sticker';
+  control('Brand / sticker text', brandText);
+
   const script = el('textarea');
   script.rows = 3;
   script.maxLength = 1200;
@@ -291,6 +304,7 @@ function buildClipEditor(job, clip) {
       effect: effect.value, framing: framing.value,
       caption_style: captions.value, hook_style: hook.value,
       script: script.value.trim(), voiceover: voice.checked,
+      brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
       narration_basis: basis.value,
       voiceover_approved: approval.checked && voice.checked
@@ -375,6 +389,8 @@ function card(job, mode = currentPage) {
       if (clip.captions_added) description.append(el('span', 'clip-tag', 'CC · Captions burned in'));
       if (clip.voiceover_added) description.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
       if (clip.hook_style === 'headline') description.append(el('span', 'clip-tag', '✦ Opening hook'));
+      if (clip.voice_marker) description.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
+      if (clip.brand_text) description.append(el('span', 'clip-tag', '◇ ' + clip.brand_text));
       if (clip.face_tracking) description.append(el('span', 'clip-tag', '◉ Face-aware crop'));
       else if (clip.framing === 'smart') description.append(el('span', 'clip-tag', 'Centered fallback'));
       if (clip.revision_count) description.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
@@ -805,6 +821,10 @@ const settingsIds = {
   narration_style: 'narration-style',
   narration_language: 'narration-language',
   narration_basis: 'narration-basis',
+  content_niche: 'content-niche',
+  clip_focus: 'clip-focus',
+  use_voice_markers: 'use-voice-markers',
+  brand_text: 'brand-text',
 };
 
 function applyDefaults(defaults, prefix) {
@@ -818,7 +838,8 @@ function applyDefaults(defaults, prefix) {
         $('custom-max-clips').value = amount;
       } else item.value = amount;
       updateCustomCount();
-    } else item.value = String(defaults[key]);
+    } else if (item.type === 'checkbox') item.checked = Boolean(defaults[key]);
+    else item.value = String(defaults[key]);
   }
 }
 
@@ -879,11 +900,62 @@ async function loadSettings() {
   }
 }
 
+async function loadCreatorProfiles() {
+  if (currentPage !== 'studio') return;
+  try {
+    const response = await fetch('/api/creator/profiles', {cache: 'no-store'});
+    if (!response.ok) return;
+    creatorProfiles = await response.json();
+    const selector = $('creator-profile-select');
+    selector.replaceChildren(el('option', '', 'Custom · not saved'));
+    for (const profile of creatorProfiles) {
+      const option = el('option', '', profile.name);
+      option.value = profile.name;
+      selector.append(option);
+    }
+  } catch (error) { notify('Could not load saved creator presets.'); }
+}
+
+function applyCreatorProfile() {
+  const name = $('creator-profile-select').value;
+  const profile = creatorProfiles.find((item) => item.name === name);
+  if (!profile) return;
+  applyDefaults(profile, '');
+  notify('Creator profile applied. Confirm settings before starting a job.');
+}
+
+async function saveCreatorProfile() {
+  const name = prompt('Save this channel style as (up to 40 characters):');
+  if (!name || !name.trim()) return;
+  const payload = {
+    name: name.trim(), content_niche: $('content-niche').value,
+    clip_focus: $('clip-focus').value.trim(),
+    caption_style: $('caption-style').value,
+    framing: $('framing').value, effect: $('effect').value,
+    hook_style: $('hook-style').value,
+    use_voice_markers: $('use-voice-markers').checked,
+    brand_text: $('brand-text').value.trim()
+  };
+  try {
+    const response = await fetch('/api/creator/profiles', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(
+      typeof result.detail === 'string' ? result.detail : 'Cannot save profile');
+    await loadCreatorProfiles();
+    $('creator-profile-select').value = result.name;
+    notify('Channel style saved. It can be reused for future batches.');
+  } catch (error) { notify(error.message); }
+}
+
 async function savePreferences(event) {
   event.preventDefault();
   const data = {};
   for (const [key, field] of Object.entries(settingsIds)) {
-    const raw = $('settings-' + field).value;
+    const element = $('settings-' + field);
+    const raw = element.type === 'checkbox' ? element.checked : element.value;
     data[key] = ['clip_seconds', 'max_clips'].includes(key) ? Number(raw) : raw;
   }
   if (!Number.isInteger(data.max_clips) || data.max_clips < 1 ||
@@ -900,6 +972,7 @@ async function savePreferences(event) {
 }
 
 loadSettings();
+loadCreatorProfiles();
 refresh();
 setInterval(() => {
   if (!['library', 'publishing', 'activity'].includes(currentPage)) return;
