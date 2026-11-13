@@ -4,8 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d0f16">
+  <script>
+    try { const t = localStorage.getItem('clipforge.appearance.theme.v2');
+      document.documentElement.dataset.theme = ['precision','editorial','control'].includes(t) ? t : 'precision';
+    } catch { document.documentElement.dataset.theme = 'precision'; }
+  </script>
   <title>ClipForge Studio</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/themes.css">
 </head>
 <body>
 <div class="shell">
@@ -29,7 +35,15 @@
   <main>
     <header class="topbar">
       <div>Workspace <span class="crumb-sep">/</span> <b id="page-crumb">Studio</b></div>
-      <div class="top-actions"><span class="top-tag">TAILNET · PRIVATE</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API reference ↗</a></div>
+      <div class="top-actions">
+        <label class="appearance-picker" for="appearance-theme"><span aria-hidden="true">◐</span><span class="appearance-label">Appearance</span>
+          <select id="appearance-theme" data-theme-select aria-label="Appearance theme">
+            <option value="precision">Precision Studio</option>
+            <option value="editorial">Editorial Canvas</option>
+            <option value="control">Control Deck</option>
+          </select>
+        </label>
+        <span class="top-tag">TAILNET · PRIVATE</span><a class="docs-link" href="/api/docs" target="_blank" rel="noopener">API reference ↗</a></div>
     </header>
     <div class="main-content">
 
@@ -198,7 +212,17 @@
 
       <section id="view-settings" class="page-view" hidden>
         <div class="eyebrow">PERSONALIZE YOUR WORKFLOW</div><h1>Studio <span>settings.</span></h1>
-        <p class="lede">Save your preferred output settings. Your media stays on the server; service keys remain in its private environment.</p>
+        <p class="lede">Customize your look, workflow and connected services. Your media stays on your private server.</p>
+        <section class="settings-card appearance-settings" aria-labelledby="appearance-heading">
+          <div class="settings-heading"><div><h2 id="appearance-heading">Appearance &amp; Layout</h2>
+            <p>Switch instantly between all three approved ClipForge 2.0 designs. Your choice is saved in this browser.</p></div></div>
+          <div class="theme-choices" role="group" aria-label="Choose appearance">
+            <button class="theme-choice" type="button" data-theme-choice="precision" aria-pressed="true"><span class="theme-swatch swatch-precision"></span><strong>Precision Studio</strong><small>Dark · Lime · Spacious media cards</small></button>
+            <button class="theme-choice" type="button" data-theme-choice="editorial" aria-pressed="false"><span class="theme-swatch swatch-editorial"></span><strong>Editorial Canvas</strong><small>Warm light · Coral · Story-first layout</small></button>
+            <button class="theme-choice" type="button" data-theme-choice="control" aria-pressed="false"><span class="theme-swatch swatch-control"></span><strong>Control Deck</strong><small>Deep navy · Teal · Compact operations</small></button>
+          </div>
+          <button type="button" class="small-action" id="theme-reset">Reset to Precision Studio</button>
+        </section>
         <div class="settings-page-grid">
           <section class="settings-card"><h2>Default clip settings</h2><p>New Studio jobs start with these preferences. Individual jobs can still override them.</p>
             <form id="settings-form" class="settings-form">
@@ -236,7 +260,28 @@
             <section class="settings-card"><h2>AI processing</h2><p id="settings-ai-status">Checking Ollama configuration…</p><p class="helper-note">AI runs inside your private Docker network. For slower servers, reduce clips per job or choose Audio-energy mode.</p></section>
             <section class="settings-card"><h2>Commentator voice</h2><p id="settings-voice-status">Checking voice connection…</p><p class="helper-note">ElevenLabs voiceover requires <code>CLIPFORGE_ELEVENLABS_API_KEY</code> and <code>CLIPFORGE_ELEVENLABS_VOICE_ID</code> in your server's <code>.env</code>. Only generated script text is sent to the voice provider. API usage may incur charges.</p></section>
             <section class="settings-card"><h2>Publishing connections</h2><div id="settings-platforms"></div><p class="helper-note">Configure platform credentials in your server's private <code>.env</code>. Publishing is always manually approved.</p></section>
-            <section class="settings-card"><h2>Security &amp; storage</h2><p>ClipForge is a private, single-user preview with no built-in login. Keep Tailscale access limited to trusted devices. Docker volumes preserve existing clips and resumable checkpoints.</p></section>
+            <section class="settings-card" id="environment-manager" aria-labelledby="environment-heading">
+              <h2 id="environment-heading">System &amp; Environment (.env)</h2>
+              <p>Admin-only management of AI, narration, publishing and infrastructure keys. Secrets are never displayed after saving. Values are written to the host .env file only when the host agent is connected.</p>
+              <p id="admin-connection-status" class="helper-note" role="status">Checking administrator access…</p>
+              <form id="admin-login-form" class="admin-login-form" hidden>
+                <label for="admin-password">Administrator password</label>
+                <input id="admin-password" type="password" autocomplete="current-password" required minlength="1">
+                <button class="small-action primary-action" type="submit">Unlock environment settings</button>
+              </form>
+              <div id="admin-environment-panel" hidden>
+                <div class="environment-actions">
+                  <span id="admin-env-revision" class="helper-note"></span>
+                  <button type="button" id="admin-env-refresh" class="small-action">↻ Refresh</button>
+                  <button type="button" id="admin-logout" class="small-action">Lock settings</button>
+                </div>
+                <div id="environment-fields" class="environment-fields"></div>
+                <p class="helper-note">Saving writes the host .env. It does not restart the running application. A safe restart is required to apply updated Docker environment values, and should only happen when jobs are idle.</p>
+                <button id="admin-env-save" type="button" class="create-button">Save validated changes to .env</button>
+              </div>
+              <p id="admin-env-feedback" class="helper-note" role="status" aria-live="polite"></p>
+            </section>
+            <section class="settings-card"><h2>Security &amp; storage</h2><p>ClipForge uses private Tailscale access for the workspace. Administrator environment editing additionally requires Argon2 login, a CSRF-protected session and a restricted host Unix socket helper. Volume data and media are separate from environment credentials.</p></section>
           </div>
         </div>
       </section>
@@ -245,6 +290,8 @@
     </div>
   </main>
 </div>
+<script src="/assets/theme.js" defer></script>
+<script src="/assets/env-settings.js" defer></script>
 <script src="/assets/app.js" defer></script>
 <script src="/assets/analytics.js" defer></script>
 </body>

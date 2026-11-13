@@ -17,12 +17,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from clipforge import __version__
+from clipforge import __version__, admin_auth
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
 from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_https_url
 from clipforge.captions import (
@@ -32,6 +32,7 @@ from clipforge.captions import (
     write_narration_captions,
     write_storyboard_captions,
 )
+from clipforge.config_agent import request_agent
 from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.engine import (
     audio_energy,
@@ -42,6 +43,7 @@ from clipforge.engine import (
     select_highlights,
     validate_url,
 )
+from clipforge.environment import field_schema, validate_patch
 from clipforge.import_auth import youtube_cookie_status
 from clipforge.narration import (
     audio_duration,
@@ -92,6 +94,15 @@ app = FastAPI(
     title="ClipForge", version=__version__, docs_url="/api/docs", lifespan=lifespan,
 )
 app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
+
+
+class AdminLogin(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class EnvironmentUpdate(BaseModel):
+    revision: str = Field(min_length=16, max_length=16)
+    changes: dict[str, str] = Field(min_length=1, max_length=24)
 
 
 class Options(BaseModel):
@@ -568,6 +579,79 @@ def index():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": __version__}
+
+
+@app.get("/api/admin/session")
+def admin_session(request: Request):
+    """Only session and CSRF metadata; never disclose the configured hash."""
+    if not admin_auth.configured():
+        return {"configured": False, "authenticated": False}
+    if admin_auth.has_session(request):
+        session = admin_auth.require_session(request)
+        return {"configured": True, "authenticated": True, "csrf": session.csrf}
+    return {"configured": True, "authenticated": False}
+
+
+@app.post("/api/admin/login")
+def admin_login(credentials: AdminLogin, request: Request, response: Response):
+    csrf = admin_auth.sign_in(request, credentials.password, response)
+    return {"authenticated": True, "csrf": csrf}
+
+
+@app.post("/api/admin/logout")
+def admin_logout(request: Request, response: Response):
+    admin_auth.require_csrf(request)
+    admin_auth.sign_out(request, response)
+    return {"authenticated": False}
+
+
+@app.get("/api/admin/environment")
+def admin_environment(request: Request):
+    admin_auth.require_session(request)
+    try:
+        result = request_agent("read")
+    except ConnectionError as exc:
+        raise HTTPException(503, "Host configuration agent not connected") from exc
+    if not result.get("ok"):
+        raise HTTPException(503, "Host configuration agent refused the request")
+    return result["data"]
+
+
+@app.get("/api/admin/environment/schema")
+def admin_environment_schema(request: Request):
+    admin_auth.require_session(request)
+    return {"entries": field_schema(), "apply_mode": "manual_restart_when_idle"}
+
+
+@app.post("/api/admin/environment/validate")
+def admin_environment_validate(body: EnvironmentUpdate, request: Request):
+    admin_auth.require_csrf(request)
+    try:
+        clean = validate_patch(body.changes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"valid": True, "keys": sorted(clean),
+            "apply_required": True, "requires_idle_queue": True}
+
+
+@app.patch("/api/admin/environment")
+def admin_environment_update(body: EnvironmentUpdate, request: Request):
+    """Write to host .env through restricted agent; never restart Docker here."""
+    admin_auth.require_csrf(request)
+    try:
+        clean = validate_patch(body.changes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    try:
+        result = request_agent("update", {
+            "revision": body.revision, "changes": clean,
+        })
+    except ConnectionError as exc:
+        raise HTTPException(503, "Host configuration agent not connected") from exc
+    if not result.get("ok"):
+        # Validation/conflict errors deliberately do not echo submitted values.
+        raise HTTPException(409, result.get("error", "Config write failed"))
+    return result["data"]
 
 
 @app.get("/api/ai/status")

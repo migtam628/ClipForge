@@ -10,3 +10,6 @@ clipforge-data/
 .env
 .DS_Store
 private-auth/
+.clipforge-env-archive/
+.clipforge-env-archive.key
+.env.lock
