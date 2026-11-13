@@ -100,9 +100,13 @@ PY
         exit 1
       fi
     fi
-    if ! systemctl --user daemon-reload ||
-       ! systemctl --user reset-failed clipforge-config-agent.service ||
-       ! systemctl --user enable --now clipforge-config-agent.service; then
+    if ! systemctl --user daemon-reload; then
+      echo "Could not reload user systemd service definitions." >&2
+      exit 1
+    fi
+    # A first-time install may not have a failed unit to reset.
+    systemctl --user reset-failed clipforge-config-agent.service >/dev/null 2>&1 || true
+    if ! systemctl --user enable --now clipforge-config-agent.service; then
       echo "User systemd service unavailable; start the agent manually in a separate shell:" >&2
       echo "  cd '$repo' && .venv/bin/python -m clipforge.config_agent --root '$repo'" >&2
       exit 1
