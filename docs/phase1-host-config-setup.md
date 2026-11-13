@@ -5,6 +5,64 @@ This release introduces three persistent UI themes and an administrator-only env
 and can change only typed keys in the existing host `.env`.**
 Do not deploy until current video jobs finish.
 
+## Recommended two-command activation
+
+This is the preferred one-time path on `mt-tech-server`. It provides stricter
+safety checks than manually copying a credential hash and building a user service.
+It does not delete volumes or change the existing video-processing engine.
+
+**First, install the already-merged Phase 1 source without restarting Docker:**
+
+```bash
+cd ~/ClipForge
+git status --short     # inspect any tracked local changes
+git pull --ff-only
+bash scripts/phase1-activate.sh --prepare
+```
+
+`--prepare` checks the main branch, creates/uses `.venv`, prompts without echo
+for a **16+ character admin password only if no active Argon2id hash exists**,
+sets the correct host group ID, prepares the restricted agent token and
+systemd user service, and tests the agent's connection to the real `.env`.
+A fresh `.env` revision is encrypted before any credential initialization.
+
+**Only after the running job queue is idle:**
+
+```bash
+bash scripts/phase1-activate.sh --deploy
+bash scripts/phase1-activate.sh --verify
+```
+
+`--deploy` refuses to restart if the job API cannot be read, has an unknown
+status, or reports any nonterminal processing state. It rebuilds only ClipForge,
+leaving existing Ollama and persistent Docker volumes untouched.
+
+If `systemctl --user` is not available, the preparation script exits with a
+manual host-agent start command instead of pretending setup succeeded.
+A systemd user service may need login-linger enabled by the system administrator
+to survive logout/reboot; do not silently change system login policy.
+
+Open the HTTPS Tailnet address in Chrome, go to Settings → Appearance &
+Layout, change all three themes, and use System & Environment to check the
+administrator login and protected settings editor.
+
+### Credential rotation
+
+If admin authentication is already configured, `--prepare` preserves the
+existing password hash. To rotate it deliberately, use:
+
+```bash
+cd ~/ClipForge
+.venv/bin/python -m clipforge.host_setup --root "$PWD" --rotate
+```
+
+It prompts for the new password, never echoes it or prints its hash, archives
+the previous `.env` encrypted, and requires an idle-queue container recreate
+before the new credential becomes active. Existing sessions are invalidated
+by restart. Never put passwords in shell arguments or screenshots.
+
+---
+
 ## 1. Select the right host project
 
 Run from the folder hosting the existing Docker Compose deployment, for example:
