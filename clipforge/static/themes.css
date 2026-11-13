@@ -288,3 +288,24 @@ html[data-theme="control"] :is(.environment-row input,.admin-login-form input) {
   .environment-actions {flex-direction:column;align-items:stretch;}
   .environment-actions .helper-note {margin:0;}
 }
+
+/* Engine 2.0 media QA: sober quality labels; never imply automatic publication approval. */
+.quality-summary {display:flex;flex-direction:column;gap:7px;margin:10px 0 5px;}
+.quality-pill {
+  display:inline-flex;max-width:max-content;padding:7px 10px;
+  font-size:10px;font-weight:750;line-height:1.4;border-radius:8px;
+  border:1px solid var(--theme-border);background:var(--theme-panel-hi);
+  color:var(--theme-ink);
+}
+.quality-review {border-color:#9b8b46;color:#e9d785;background:#393523;}
+.quality-failed {border-color:#9b4d58;color:#f5a5aa;background:#40262d;}
+.quality-details {font-size:11px;color:var(--theme-muted);}
+.quality-details summary {cursor:pointer;line-height:1.5;color:var(--theme-ink);}
+.quality-description {border:1px solid var(--theme-border);border-radius:9px;
+  background:var(--theme-panel);padding:11px;margin-top:8px;line-height:1.5;}
+.quality-description p {margin:0 0 8px!important;font-size:11px;}
+.quality-issue {padding:5px 0;border-top:1px solid var(--theme-border);
+  text-transform:capitalize;overflow-wrap:anywhere;}
+html[data-theme="editorial"] .quality-review {background:#fff5d6;color:#665317;border-color:#d6c388;}
+html[data-theme="editorial"] .quality-failed {background:#fce9e9;color:#9f3232;border-color:#edb1b1;}
+html[data-theme="control"] .quality-review {background:#394020;color:#f3eba2;border-color:#8f9950;}
