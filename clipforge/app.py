@@ -290,6 +290,16 @@ def _stage(folder: Path, status: str, progress: int) -> None:
         _write(folder, job)
 
 
+def _vision_preflight(options: Options) -> dict | None:
+    """Validate required local vision model before expensive processing."""
+    if options.narration == "none" or options.narration_basis != "video":
+        return None
+    state = vision_status()
+    if not state.get("installed"):
+        return state
+    return None
+
+
 def _process(folder: Path, source_path: Path | None = None, url: str | None = None) -> None:
     """Resume from persisted media, transcript, AI scores and finished renders."""
     try:
@@ -299,6 +309,9 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
         opts = Options(**job["options"])
         if opts.narration == "narrated":
             require_voice_config()
+        missing_vision = _vision_preflight(opts)
+        if missing_vision:
+            raise RuntimeError(missing_vision["note"])
         LOGGER.info("ClipForge job %s started or resumed", folder.name)
         source_path = source_path or recover_source(folder, job)
         if source_path is None and job["source"] == "url":
@@ -1043,12 +1056,23 @@ def list_batches():
 
 @app.post("/api/jobs/{job_id}/resume", status_code=202)
 def resume_job(job_id: str):
-    """Manual recovery of a failed job; never start the same job twice."""
+    """Fail immediately on missing prerequisites, keeping failed-job checkpoints."""
     folder = job_folder(job_id)
     with LOCK:
         job = _read(folder)
         if job["status"] != "failed":
             raise HTTPException(409, "Only failed jobs can be resumed manually")
+        options = Options(**job["options"])
+    # Check Ollama outside the global job lock (the network may take seconds).
+    missing_vision = _vision_preflight(options)
+    if missing_vision:
+        raise HTTPException(
+            409, "Cannot resume yet: " + missing_vision["note"],
+        )
+    with LOCK:
+        job = _read(folder)
+        if job["status"] != "failed":
+            raise HTTPException(409, "Job is already being processed")
         job.update(status="queued", error=None,
                    resume_count=job.get("resume_count", 0) + 1)
         _write(folder, job)

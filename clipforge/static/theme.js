@@ -27,19 +27,22 @@
       button.classList.toggle('is-current', selected);
     }
   };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      apply(read(), false);
-      document.querySelectorAll('[data-theme-select]').forEach((select) => {
-        select.addEventListener('change', () => apply(select.value));
-      });
-      document.querySelectorAll('[data-theme-choice]').forEach((button) => {
-        button.addEventListener('click', () => apply(button.dataset.themeChoice));
-      });
-      const reset = document.getElementById('theme-reset');
-      if (reset) reset.addEventListener('click', () => apply('precision'));
-    }, {once: true});
-  } else {
+  const initialize = () => {
+    // Deferred scripts normally run while readyState is "interactive", NOT
+    // "loading". Every branch must attach event listeners as well as render.
     apply(read(), false);
+    document.querySelectorAll('[data-theme-select]').forEach((select) => {
+      select.addEventListener('change', () => apply(select.value));
+    });
+    document.querySelectorAll('[data-theme-choice]').forEach((button) => {
+      button.addEventListener('click', () => apply(button.dataset.themeChoice));
+    });
+    const reset = document.getElementById('theme-reset');
+    if (reset) reset.addEventListener('click', () => apply('precision'));
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initialize, {once: true});
+  } else {
+    initialize();
   }
 })();

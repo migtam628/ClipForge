@@ -1048,9 +1048,9 @@ async function loadSettings() {
         : 'AI is not fully configured. You can still use Audio-energy selection.';
       updateNarrationNotice();
       if (settings.vision && $('narration-basis').value === 'video') {
-        $('narration-notice').textContent +=
-          ' For visual analysis, install local Ollama model ' +
-          settings.vision.model + ' before generating clips.';
+        $('narration-notice').textContent += settings.vision.installed
+          ? ' Vision model ' + settings.vision.model + ' is installed.'
+          : ' Vision model unavailable: ' + settings.vision.note;
       }
       if (!settings.narration.elevenlabs_configured) {
         $('narration-notice').textContent +=
@@ -1070,10 +1070,10 @@ async function loadSettings() {
           : yt.status === 'invalid'
             ? 'Cookie file detected but invalid or unreadable. Check Netscape format and UID 10001 permissions.'
             : 'No private YouTube cookie file detected. URL downloads may require verification.';
-      $('settings-vision-status').textContent =
-        'Local visual model: ' + (settings.vision?.model || 'not configured') +
-        '. Video analysis samples frames at multiple timestamps. ' +
-        'Model installation is checked when generating a clip.';
+      $('settings-vision-status').textContent = settings.vision?.installed
+        ? 'Vision model: ' + settings.vision.model + ' · installed and ready.'
+        : 'Vision model: ' + (settings.vision?.model || 'not configured') +
+          ' · ' + (settings.vision?.note || 'Status unknown.');
       $('settings-voice-status').textContent =
         settings.narration.elevenlabs_configured
           ? 'ElevenLabs voiceover is configured on this server.'

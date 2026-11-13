@@ -29,15 +29,49 @@ LANGUAGES = {"en": "English", "es": "Spanish"}
 
 
 def vision_status() -> dict:
+    """Report actual installed model state without triggering model downloads.
+
+    A missing or unreachable Ollama server must never be labeled 'installed'.
+    """
     model = os.environ.get("CLIPFORGE_VISION_MODEL", "moondream").strip()
-    return {
-        "model": model,
-        "configured": bool(model),
-        "installed": "not_checked",
-        "note": "Video-aware scripts need a local Ollama vision model. "
-                "Run: docker compose --profile ai exec ollama ollama pull moondream. "
-                "ClipForge samples still frames; it does not understand continuous motion.",
+    command = "docker compose --profile ai exec ollama ollama pull " + model
+    status = {
+        "model": model, "configured": bool(model), "installed": False,
+        "status": "not_configured", "note": "Configure a local vision model",
     }
+    if not model or not re.fullmatch(r"[A-Za-z0-9_./:-]{1,100}", model):
+        return status
+    base = os.environ.get("CLIPFORGE_OLLAMA_URL", "").rstrip("/")
+    target = urlsplit(base)
+    if target.scheme != "http" or target.hostname not in {
+        "ollama", "localhost", "127.0.0.1",
+    }:
+        status.update(status="unavailable", note="Local Ollama URL is not configured")
+        return status
+    try:
+        with urlopen(base + "/api/tags", timeout=4) as response:
+            payload = json.loads(response.read(1000000))
+        models = payload.get("models", [])
+        if not isinstance(models, list):
+            raise ValueError("Invalid Ollama model catalog")
+        names = {
+            str(item.get(key))
+            for item in models if isinstance(item, dict)
+            for key in ("name", "model") if isinstance(item.get(key), str)
+        }
+        status["installed"] = model in names or (
+            ":" not in model and model + ":latest" in names
+        )
+        status["status"] = "ready" if status["installed"] else "missing"
+        status["note"] = (
+            "Local vision model is installed and ready for video analysis"
+            if status["installed"] else "Local vision model is not installed. Run: " + command
+        )
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError,
+            json.JSONDecodeError):
+        status.update(status="unavailable",
+                      note="Ollama is unreachable; verify the Ollama container before resuming")
+    return status
 
 
 def _ollama(body: dict, *, vision: bool = False) -> str:
@@ -65,7 +99,8 @@ def _ollama(body: dict, *, vision: bool = False) -> str:
             if exc.code == 404 and vision:
                 raise RuntimeError(
                     "Local vision model not installed in Ollama. "
-                    "Run: docker compose --profile ai exec ollama ollama pull moondream"
+                    "Run: docker compose --profile ai exec ollama ollama pull "
+                    + str(body.get("model", "moondream"))
                 ) from exc
             if exc.code < 500 and exc.code not in (408, 409, 425, 429):
                 raise RuntimeError(f"Ollama rejected narration (HTTP {exc.code})") from exc
