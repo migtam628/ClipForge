@@ -434,6 +434,28 @@ function card(job, mode = currentPage) {
       } else description.append(link);
       if (clip.title && mode !== 'library')
         description.append(el('p', 'clip-ai-title', clip.title));
+      const audit = clip.quality_report;
+      if (audit && (mode === 'library' || mode === 'publishing')) {
+        const quality = el('div', 'quality-summary');
+        quality.append(el('span',
+          'quality-pill ' + (audit.technical_pass ? 'quality-review' : 'quality-failed'),
+          audit.technical_pass ? 'Technical checks passed · Editorial review needed'
+            : 'Technical check failed · Fix before posting'));
+        const details = el('details', 'quality-details');
+        details.append(el('summary', '', 'View export quality report'));
+        const info = el('div', 'quality-description');
+        info.append(el('p', '', 'Technical integrity is checked automatically. '
+          + 'Narration accuracy, creative quality, copyright, and each platform’s '
+          + 'publishing requirements still need verification.'));
+        const issues = [...(audit.technical_issues || []), ...(audit.review_flags || [])];
+        for (const flag of issues) {
+          info.append(el('div', 'quality-issue',
+            String(flag).replaceAll('_', ' ')));
+        }
+        details.append(info);
+        quality.append(details);
+        description.append(quality);
+      }
       const tags = el('div', 'clip-tag-list');
       const tagTarget = mode === 'library' ? tags : description;
       if (mode === 'library') description.append(tags);

@@ -52,6 +52,7 @@ from clipforge.narration import (
     synthesize,
 )
 from clipforge.publishing import platform_status, publish
+from clipforge.quality import inspect_rendered_clip, refine_speech_boundaries
 from clipforge.recovery import load_json, recover_source, save_json
 from clipforge.smart_frame import plan_face_tracking
 from clipforge.storyboard import build_storyboard, synthesize_timed_voice, vision_status
@@ -371,6 +372,11 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 )
             if not candidates:
                 raise ValueError("No suitable clips were found")
+            # Preserve the selected story while avoiding mid-sentence cuts.
+            # Never move a boundary when a safe, non-overlapping trim is unavailable.
+            candidates = refine_speech_boundaries(
+                candidates, transcript, info["duration"],
+            )
             save_json(folder / "candidates.json", candidates)
         else:
             LOGGER.info("Reused %d selected clips for job %s", len(candidates), folder.name)
@@ -499,6 +505,21 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "face_tracking": smart_track is not None,
                     **candidate,
                 })
+            # Observable technical checks plus clearly marked editorial uncertainty.
+            # This is an audit, not automatic approval for posting.
+            active_clip = clips[-1]
+            active_clip["quality_report"] = inspect_rendered_clip(
+                destination,
+                expected_duration=active_clip["duration"],
+                aspect_ratio=opts.aspect_ratio,
+                source_has_audio=info["has_audio"],
+                narration=active_clip.get("narration", "none"),
+                script=active_clip.get("script"),
+                beats=active_clip.get("storyboard") or [],
+                captions_requested=opts.caption_style != "none",
+                captions_added=active_clip.get("captions_added", False),
+                candidate={**active_clip, "creator_niche": opts.content_niche},
+            )
             _patch(folder, clips=clips, progress=max(
                 _read(folder).get("progress", 0),
                 20 + int(index / len(candidates) * 79),
@@ -1156,6 +1177,23 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             thumbnail = thumbnail_path.name
         except (OSError, RuntimeError):
             LOGGER.warning("Thumbnail unavailable for revised clip %s", base)
+        revised_narration = (
+            "narrated" if voiceover else ("script" if (storyboard or edit.script.strip()) else "none")
+        )
+        revised_script = storyboard["script"] if storyboard else edit.script.strip() or None
+        revised_beats = storyboard["beats"] if storyboard else []
+        quality_report = inspect_rendered_clip(
+            destination,
+            expected_duration=edit.duration,
+            aspect_ratio=job["options"]["aspect_ratio"],
+            source_has_audio=info["has_audio"],
+            narration=revised_narration,
+            script=revised_script,
+            beats=revised_beats,
+            captions_requested=edit.caption_style != "none",
+            captions_added=subtitles is not None,
+            candidate={"creator_niche": job["options"].get("content_niche", "general")},
+        )
         # Commit metadata only after a playable final MP4 exists.
         with LOCK:
             current = _read(folder)
@@ -1178,9 +1216,12 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 hook_style=edit.hook_style if hook_file else "none",
                 voiceover_added=voiceover is not None,
                 face_tracking=smart_track is not None,
-                narration="narrated" if voiceover else ("script" if edit.script.strip() else "none"),
-                script=(storyboard["script"] if storyboard else edit.script.strip() or None),
-                storyboard=(storyboard["beats"] if storyboard else []),
+                narration=revised_narration,
+                script=revised_script,
+                storyboard=revised_beats,
+                quality_report=quality_report,
+                boundary_review=[],
+                speech_boundary_refined=False,
                 analysis_basis=(storyboard["analysis_basis"] if storyboard else "manual"),
                 frame_samples=(storyboard["frame_samples"] if storyboard else 0),
                 brand_text=edit.brand_text.strip(),
