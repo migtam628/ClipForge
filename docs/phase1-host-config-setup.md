@@ -83,6 +83,37 @@ bash scripts/phase1-activate.sh --verify
 A broken host agent affects the privileged Settings editor; it does not mean
 the existing clip-processing Docker containers or Ollama are down.
 
+### Agent active but socket initially missing
+
+The systemd user service may enter `active (running)` before the Python
+agent creates `private-auth/config-agent.sock`. The corrected
+`--prepare` operation waits for an authenticated Unix-socket read rather
+than checking socket existence immediately. A global `systemd-analyze verify`
+may also print unrelated mount-unit diagnostics; confirm the ClipForge agent
+status independently.
+
+If the service is already active and no videos are processing, you can bypass
+unnecessary password and virtualenv setup:
+
+```bash
+cd ~/ClipForge
+git pull --ff-only
+systemctl --user is-active clipforge-config-agent.service
+test -S private-auth/config-agent.sock
+CLIPFORGE_CONFIG_AGENT_DIR="$PWD/private-auth" .venv/bin/python - <<'PY'
+from clipforge.config_agent import request_agent
+r = request_agent("read")
+assert r.get("ok")
+print("Host configuration agent connected")
+PY
+bash scripts/phase1-activate.sh --deploy
+bash scripts/phase1-activate.sh --verify
+```
+
+The deployment script refuses to restart if jobs are nonterminal, and now
+verifies the container's authenticated connection to the host agent after
+deploying. It does not return private `.env` values to the terminal.
+
 ### Credential rotation
 
 If admin authentication is already configured, `--prepare` preserves the
