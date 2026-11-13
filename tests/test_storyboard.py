@@ -166,3 +166,55 @@ def test_settings_exposes_vision_without_secret(tmp_path, monkeypatch):
     assert "api_key" not in json.dumps(resp.json()["vision"]).lower()
     page = TestClient(module.app).get("/studio").text
     assert 'id="narration-basis"' in page
+
+
+def test_vision_retries_blank_response_with_different_frame(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_VISION_MODEL", "moondream")
+    sampled = []
+    prompts = []
+
+    def sample_frame(src, timestamp):
+        sampled.append((src, timestamp))
+        return b"valid-JPEG-placeholder"
+
+    responses = iter(["  ", "A person standing beside a red car."])
+    def model_response(payload, **kwargs):
+        assert kwargs["vision"]
+        assert payload["stream"] is False
+        assert payload["keep_alive"] == "5m"
+        assert payload["options"]["num_predict"] >= 160
+        prompts.append(payload["prompt"])
+        return next(responses)
+
+    monkeypatch.setattr(storyboard, "_frame", sample_frame)
+    monkeypatch.setattr(storyboard, "_ollama", model_response)
+    source = tmp_path / "source.mp4"
+    assert storyboard._visual_evidence(source, 12.0) == (
+        "A person standing beside a red car."
+    )
+    assert sampled == [(source, 12.0), (source, 11.25)]
+    assert len(set(prompts)) == 2
+
+
+def test_vision_refuses_to_fabricate_after_two_blank_frames(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_VISION_MODEL", "moondream")
+    frames = []
+    monkeypatch.setattr(storyboard, "_frame",
+                        lambda _, t: frames.append(t) or b"jpeg")
+    monkeypatch.setattr(storyboard, "_ollama", lambda *_args, **_kwargs: "")
+    with pytest.raises(RuntimeError, match="not fabricated"):
+        storyboard._visual_evidence(tmp_path / "source.mp4", 4)
+    assert frames == [4, 3.25]
+
+
+def test_vision_success_does_not_unnecessarily_retry(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_VISION_MODEL", "moondream")
+    seen = []
+    monkeypatch.setattr(storyboard, "_frame",
+                        lambda _src, t: seen.append(t) or b"frame")
+    monkeypatch.setattr(storyboard, "_ollama",
+                        lambda *_args, **_kwargs: "A street with shops.")
+    assert storyboard._visual_evidence(tmp_path / "source.mp4", 10) == (
+        "A street with shops."
+    )
+    assert seen == [10]
