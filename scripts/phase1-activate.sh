@@ -52,7 +52,7 @@ case "$action" in
     if [[ ! -x .venv/bin/python ]]; then python3 -m venv .venv; fi
     .venv/bin/python -m pip install -e .
     chmod 600 .env
-    if ! grep -q '^CLIPFORGE_ADMIN_PASSWORD_HASH=\x27\$argon2id\$' .env; then
+    if ! .venv/bin/python -c 'from pathlib import Path; from clipforge.environment import read_env; raise SystemExit(0 if read_env(Path(".env")).get("CLIPFORGE_ADMIN_PASSWORD_HASH", "").startswith("$argon2id$") else 1)'; then
       [[ -t 0 ]] || {
         echo "Administrator password setup requires an interactive terminal." >&2; exit 1;
       }
