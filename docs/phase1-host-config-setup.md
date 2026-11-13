@@ -46,6 +46,43 @@ Open the HTTPS Tailnet address in Chrome, go to Settings → Appearance &
 Layout, change all three themes, and use System & Environment to check the
 administrator login and protected settings editor.
 
+### Fixing `bad unit file setting` on existing installations
+
+The earlier `--prepare` script generated a quoted `WorkingDirectory` value,
+which systemd rejects as a non-absolute path. The corrected script writes an
+unquoted absolute path and validates the service unit with
+`systemd-analyze verify` before attempting to activate it.
+
+If `clipforge-config-agent.service` is failing with `bad-setting`, update the
+repository, then re-run preparation (this preserves an existing administrator
+hash, clips, `.env` values, and Docker volumes):
+
+```bash
+cd ~/ClipForge
+git pull --ff-only
+bash scripts/phase1-activate.sh --prepare
+systemctl --user status clipforge-config-agent.service --no-pager --full
+```
+
+The service can be debugged without printing secrets:
+
+```bash
+systemd-analyze verify "$HOME/.config/systemd/user/clipforge-config-agent.service"
+systemctl --user cat clipforge-config-agent.service
+journalctl --user -u clipforge-config-agent.service -n 35 --no-pager
+```
+
+Once `private-auth/config-agent.sock` exists and the host-agent read test
+succeeds, deploy the app **only after the queue is idle**:
+
+```bash
+bash scripts/phase1-activate.sh --deploy
+bash scripts/phase1-activate.sh --verify
+```
+
+A broken host agent affects the privileged Settings editor; it does not mean
+the existing clip-processing Docker containers or Ollama are down.
+
 ### Credential rotation
 
 If admin authentication is already configured, `--prepare` preserves the
