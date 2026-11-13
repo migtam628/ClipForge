@@ -65,20 +65,23 @@ case "$action" in
     mkdir -p "$unit_dir"
     python3 - "$repo" "$unit_dir/clipforge-config-agent.service" <<'PY'
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
 unit = pathlib.Path(sys.argv[2])
-# A normal home directory should not contain newlines; reject ambiguous unit syntax.
-if any(c in str(root) for c in '\n\r"'):
-    raise SystemExit("Unsupported characters in project directory")
+# Unit WorkingDirectory= requires an UNQUOTED absolute path. Unlike a shell,
+# quotes are parsed as literal content here; they trigger systemd bad-setting.
+# Fail closed for paths that would need systemd-specific escaping.
+if not re.fullmatch(r"/[A-Za-z0-9_./+-]+", str(root)):
+    raise SystemExit("Unsupported characters in project path for systemd unit")
 unit.write_text(
     "[Unit]\n"
     "Description=ClipForge host configuration agent (restricted Unix socket)\n"
     "[Service]\n"
     "Type=simple\n"
-    f'WorkingDirectory="{root}"\n'
-    f'ExecStart="{root}/.venv/bin/python" -m clipforge.config_agent --root "{root}"\n'
+    f"WorkingDirectory={root}\n"
+    f"ExecStart={root}/.venv/bin/python -m clipforge.config_agent --root {root}\n"
     "Restart=on-failure\n"
     "RestartSec=3\n"
     "NoNewPrivileges=true\n"
@@ -89,7 +92,17 @@ unit.write_text(
 )
 unit.chmod(0o600)
 PY
-    if ! systemctl --user daemon-reload || ! systemctl --user enable --now clipforge-config-agent.service; then
+    # Validate the generated unit BEFORE attempting to reload/start it.
+    # This catches bad WorkingDirectory, ExecStart and unsupported directives.
+    if command -v systemd-analyze >/dev/null 2>&1; then
+      if ! systemd-analyze verify "$unit_dir/clipforge-config-agent.service"; then
+        echo "Invalid systemd unit. Review the diagnostics above; no container was restarted." >&2
+        exit 1
+      fi
+    fi
+    if ! systemctl --user daemon-reload ||
+       ! systemctl --user reset-failed clipforge-config-agent.service ||
+       ! systemctl --user enable --now clipforge-config-agent.service; then
       echo "User systemd service unavailable; start the agent manually in a separate shell:" >&2
       echo "  cd '$repo' && .venv/bin/python -m clipforge.config_agent --root '$repo'" >&2
       exit 1
