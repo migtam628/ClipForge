@@ -111,10 +111,22 @@ PY
       echo "  cd '$repo' && .venv/bin/python -m clipforge.config_agent --root '$repo'" >&2
       exit 1
     fi
-    [[ -S private-auth/config-agent.sock ]] || {
-      echo "Host agent socket is missing; inspect systemctl --user status clipforge-config-agent" >&2
+    # systemd can report "active" before Python has bound its Unix socket.
+    # Wait for the socket AND an authenticated read, never just the unit state.
+    agent_ready=0
+    for attempt in {1..40}; do
+      if [[ -S private-auth/config-agent.sock ]] &&
+         CLIPFORGE_CONFIG_AGENT_DIR="$repo/private-auth" .venv/bin/python -c 'from clipforge.config_agent import request_agent; response = request_agent("read"); assert response.get("ok")' >/dev/null 2>&1; then
+        agent_ready=1
+        break
+      fi
+      sleep 0.25
+    done
+    if [[ "$agent_ready" != 1 ]]; then
+      echo "Host configuration agent did not become ready. No containers were restarted." >&2
+      systemctl --user status clipforge-config-agent.service --no-pager --full >&2 || true
       exit 1
-    }
+    fi
     CLIPFORGE_CONFIG_AGENT_DIR="$repo/private-auth" .venv/bin/python - <<'PY'
 from clipforge.config_agent import request_agent
 result = request_agent("read")
@@ -142,14 +154,33 @@ PY
     [[ "$local_settings_html" == *'id="admin-environment-panel"'* ]] || {
       echo "Environment settings UI not found" >&2; exit 1;
     }
-    echo "DEPLOYED — Themes and Settings UI detected."
+    # HTML alone is insufficient: ensure the non-root web container can access
+    # the host agent token/socket via the expected supplementary group.
+    docker compose --profile ai exec -T clipforge python - <<'PY'
+from clipforge.config_agent import request_agent
+response = request_agent("read")
+if not response.get("ok"):
+    raise SystemExit("The web container cannot read the host configuration agent")
+print("Container-to-host environment agent: connected")
+PY
+    echo "DEPLOYED — Themes, Settings and host agent connection verified."
     ;;
   --verify)
     curl -fsS --max-time 15 http://127.0.0.1:8765/api/health
     printf '\n'
     docker compose --profile ai ps
-    [[ -S private-auth/config-agent.sock ]] &&
-      echo "Host config agent socket: present" ||
-      echo "Host config agent socket: missing (Settings editor unavailable)"
+    if [[ -S private-auth/config-agent.sock ]]; then
+      echo "Host config agent socket: present"
+      docker compose --profile ai exec -T clipforge python - <<'PY'
+from clipforge.config_agent import request_agent
+response = request_agent("read")
+if not response.get("ok"):
+    raise SystemExit("Host config agent cannot be reached from ClipForge container")
+print("Settings environment agent: connected")
+PY
+    else
+      echo "Host config agent socket: missing (Settings editor unavailable)" >&2
+      exit 1
+    fi
     ;;
 esac
