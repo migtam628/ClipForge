@@ -109,3 +109,18 @@ def test_generated_systemd_unit_has_valid_absolute_paths(tmp_path):
             capture_output=True, text=True, check=False,
         )
         assert verified.returncode == 0, verified.stderr
+
+
+def test_agent_activation_waits_for_real_socket_and_checks_container_access():
+    """A started systemd unit may not have created its socket yet."""
+    script = (ROOT / "scripts" / "phase1-activate.sh").read_text()
+    assert "for attempt in {1..40}; do" in script
+    assert "sleep 0.25" in script
+    assert "agent_ready=1" in script
+    assert 'CLIPFORGE_CONFIG_AGENT_DIR="$repo/private-auth"' in script
+    assert 'request_agent("read")' in script
+    assert "Host configuration agent did not become ready." in script
+    assert script.index("agent_ready=0") < script.index("PREPARED")
+    assert script.count("docker compose --profile ai exec -T clipforge python -") >= 2
+    assert "Container-to-host environment agent: connected" in script
+    assert "Settings environment agent: connected" in script
