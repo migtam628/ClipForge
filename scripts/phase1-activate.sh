@@ -118,10 +118,11 @@ PY
     echo "Checking app health..."
     curl -fsS --max-time 15 http://127.0.0.1:8765/api/health
     printf '\nChecking appearance and Settings UI...\n'
-    curl -fsS http://127.0.0.1:8765/settings | grep -q 'id="appearance-theme"' || {
+    local_settings_html="$(curl -fsS --max-time 15 http://127.0.0.1:8765/settings)"
+    [[ "$local_settings_html" == *'id="appearance-theme"'* ]] || {
       echo "Theme switcher not found" >&2; exit 1;
     }
-    curl -fsS http://127.0.0.1:8765/settings | grep -q 'id="admin-environment-panel"' || {
+    [[ "$local_settings_html" == *'id="admin-environment-panel"'* ]] || {
       echo "Environment settings UI not found" >&2; exit 1;
     }
     echo "DEPLOYED — Themes and Settings UI detected."
