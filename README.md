@@ -184,6 +184,15 @@ over 15 minutes for its visual pass alone. See the container logs for
 `Narration visual evidence ready: window N/M` while waiting; avoid repeatedly
 resuming a job that is still processing.
 
+**Timed script reliability:** The language model writes at most two windows
+per request using a JSON schema and checks that every returned ID matches the
+requested window. A malformed or truncated two-window reply is retried as
+individual windows; if that also fails, the job stops without inventing a
+script. Valid text drafts are saved separately from frame descriptions so a
+resumed job can continue without repeating earlier visual analysis or valid
+narration beats. Follow `Timed narration script ready: windows N-M/T` in the
+container logs. No source text or raw model output is included in error logs.
+
 **Limitations:** This is a still-frame sampler, not motion recognition or
 continuous shot-by-shot video understanding. It can miss quick events or
 misdescribe images. Review the timed script against the clip and correct
