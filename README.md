@@ -4,6 +4,38 @@
 
 ![Preview](https://img.shields.io/badge/version-0.10.0--preview-d4f268) ![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
 
+## Guided Studio and two-person reaction framing
+
+The Studio's four-step creation flow organizes existing capabilities as **Your
+video → Framing → Style & moments → Review & create**. The interface is inspired
+by modern video-clipping workflows while retaining ClipForge's own appearance,
+local processing and explicit permission checks. Choose a video URL or authorized
+file, pick a layout, customize AI moment discovery and captions, then queue the
+job. All jobs still run through the same persistent worker, and all generated
+results remain in the **Library** for review and download. Nothing is published
+automatically.
+
+**Split in two** is a real FFmpeg rendering layout for 9:16 reaction or
+interview clips: the upper and lower panels are separately cropped from two
+user-positioned source rectangles. Choose a single local file to see a live
+preview, drag the two crop boxes over the people, and adjust their zoom sliders.
+The normalized crop coordinates are validated, saved with the job and applied
+to every rendered clip. For a URL or batch, the original footage is unavailable
+until downloaded: framing is saved, but the setup-time preview cannot show the
+remote video. Position boxes based on a local copy if precision is important.
+
+Other layouts remain available: smart face-aware framing, centered crop,
+blurred background and full-frame padding. Six caption styles are selectable
+from visual examples; their sample words are illustrative, while rendered
+captions come from actual recognized speech. Clip discovery and narrated scripts
+still require working local AI models. A YouTube HTTP 403 remains a separate
+import failure, not a framing problem: use a file you have rights to edit if
+the original provider rejects downloading.
+
+For local UI iteration, run `npm run dev` with `uv` installed. The optional
+no-dependency Node wrapper serves the **real FastAPI UI and API** at port 4173;
+it is not required for the Docker production deployment.
+
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
 **Studio → Vertical framing** now supports smart face-aware crop and blurred

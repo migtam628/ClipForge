@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from pathlib import Path
@@ -34,6 +35,25 @@ def test_invalid_options():
     response = client.post("/api/jobs", json={
         "url": "https://youtu.be/abc", "rights_confirmed": True,
         "max_clips": 999999,
+    })
+    assert response.status_code == 422
+
+
+def test_split_framing_validates_boxes_and_requires_vertical_output():
+    default = module.Options(framing="split")
+    assert len(default.split_boxes) == 2
+    assert default.aspect_ratio == "9:16"
+    response = client.post("/api/jobs", json={
+        "url": "https://youtu.be/abc", "rights_confirmed": True,
+        "framing": "split", "aspect_ratio": "16:9",
+    })
+    assert response.status_code == 422
+    response = client.post("/api/jobs", json={
+        "url": "https://youtu.be/abc", "rights_confirmed": True,
+        "framing": "split", "split_boxes": [
+            {"x": 0.9, "y": 0, "width": 0.2, "height": 1},
+            {"x": 0, "y": 0, "width": 0.5, "height": 1},
+        ],
     })
     assert response.status_code == 422
 
@@ -79,6 +99,42 @@ def test_upload_and_export(tmp_path, monkeypatch):
     assert exported.content[:2] == b"PK"
     assert client.delete(f"/api/jobs/{job_id}").status_code == 204
     assert not (Path(tmp_path) / job_id).exists()
+
+
+def test_split_upload_persists_manual_boxes_and_completes(tmp_path, monkeypatch):
+    """The browser's JSON form field reaches the real renderer and library metadata."""
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    source = tmp_path / "two-person-source.mp4"
+    import subprocess
+
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=8:duration=3.5",
+        "-c:v", "libx264", "-preset", "ultrafast", str(source),
+    ], capture_output=True, check=True)
+    boxes = [
+        {"x": 0.0, "y": 0.0, "width": 0.45, "height": 1.0},
+        {"x": 0.55, "y": 0.0, "width": 0.45, "height": 1.0},
+    ]
+    with source.open("rb") as stream:
+        response = client.post("/api/uploads", data={
+            "clip_seconds": "15", "max_clips": "1", "framing": "split",
+            "split_boxes": json.dumps(boxes), "rights_confirmed": "true",
+        }, files={"file": ("sample.mp4", stream, "video/mp4")})
+    assert response.status_code == 202, response.text
+    job_id = response.json()["id"]
+    deadline = time.monotonic() + 50
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.1)
+    assert job["status"] == "completed", job.get("error")
+    assert job["options"]["split_boxes"] == boxes
+    assert job["clips"][0]["framing"] == "split"
+    assert job["clips"][0]["split_boxes"] == boxes
+    video = client.get(f"/api/jobs/{job_id}/clips/{job['clips'][0]['filename']}")
+    assert video.status_code == 200 and len(video.content) > 500
 
 
 def test_ai_editing_upload_end_to_end_with_stub_models(tmp_path, monkeypatch):

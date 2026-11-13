@@ -52,6 +52,13 @@
         <h1>From long-form to <span>scroll-stopping.</span></h1>
         <p class="lede">Turn one video into polished short-form stories with AI highlights, bold captions, and optional narrated commentary.</p>
         <section class="creator-panel" aria-label="Create clips">
+          <nav class="studio-journey" aria-label="Clip creation steps">
+            <button type="button" class="journey-step is-active" data-journey="0" aria-current="step"><span>1</span> Your video</button>
+            <button type="button" class="journey-step" data-journey="1"><span>2</span> Framing</button>
+            <button type="button" class="journey-step" data-journey="2"><span>3</span> Style &amp; moments</button>
+            <button type="button" class="journey-step" data-journey="3"><span>4</span> Review &amp; create</button>
+          </nav>
+          <div class="journey-panel" data-journey-panel="0">
           <div class="panel-heading"><span class="step">01</span><div><h2>Import your footage</h2><p>A video link or a file you have rights to use</p></div></div>
           <div class="tabs" role="tablist">
             <button type="button" class="tab active" id="url-tab" aria-selected="true">↗ Video URL</button>
@@ -59,6 +66,46 @@
           </div>
           <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><label for="url-list" class="batch-extra-label">Or queue multiple URLs (one per line, up to 100)</label><textarea id="url-list" class="batch-url-list" rows="3" placeholder="https://youtu.be/video1&#10;https://youtu.be/video2"></textarea><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
           <div id="upload-area" class="input-area" hidden><label for="file">Select video files</label><div class="drop-zone"><input id="file" type="file" multiple accept="video/mp4,video/quicktime,video/x-matroska,video/webm"><div class="drop-icon">⇧</div><strong>Choose one or many videos</strong><span>Up to 100 files · 2 GB each · 8 GB per batch</span></div><label for="folder" class="batch-extra-label">Or choose a folder of videos</label><input id="folder" type="file" webkitdirectory multiple aria-label="Choose a video folder"><p class="helper-note" id="batch-selection-hint">Videos are queued one at a time for CPU-friendly processing. Each keeps its own retry checkpoints.</p></div>
+          <div class="journey-tip">Your source stays private on this server. URL imports depend on the video host allowing a download; uploading your own MP4 is the most reliable option.</div>
+          </div>
+          <div class="journey-panel" data-journey-panel="1" hidden>
+            <div class="panel-heading"><span class="step">02</span><div><h2>Frame the moment</h2><p>Choose how your footage fits vertical video. For reactions, drag each crop box to frame both people.</p></div></div>
+            <div class="framing-layouts" role="group" aria-label="Framing layout">
+              <button type="button" class="framing-choice is-chosen" data-framing="smart"><strong>Auto focus</strong><small>Follow faces where detectable</small></button>
+              <button type="button" class="framing-choice" data-framing="split"><strong>Split in two</strong><small>Reaction / interview · stacked</small></button>
+              <button type="button" class="framing-choice" data-framing="blur"><strong>Full scene</strong><small>Blurred background</small></button>
+              <button type="button" class="framing-choice" data-framing="crop"><strong>Center</strong><small>Simple vertical crop</small></button>
+            </div>
+            <div class="framing-workbench">
+              <div class="framing-card">
+                <div class="framing-card-head"><strong>Original footage</strong><span id="framing-source-label">Select a file for live preview</span></div>
+                <div class="framing-stage" id="framing-stage">
+                  <video id="framing-source" playsinline muted loop preload="metadata" aria-label="Original video preview" hidden></video>
+                  <div class="framing-empty" id="framing-empty">File previews appear here. For video links, framing is applied to the downloaded source during rendering.</div>
+                  <div class="split-selection" id="split-selection" hidden>
+                    <button type="button" class="crop-box crop-box-a" data-crop="0" aria-label="Move top split screen box" tabindex="0"><span>TOP · 1</span></button>
+                    <button type="button" class="crop-box crop-box-b" data-crop="1" aria-label="Move bottom split screen box" tabindex="0"><span>BOTTOM · 2</span></button>
+                  </div>
+                </div>
+                <p class="helper-note" id="framing-instructions">For local uploads, you can preview the framing before processing.</p>
+                <div class="split-controls" id="split-controls" hidden>
+                  <label for="split-zoom-0">Top person · zoom <input type="range" id="split-zoom-0" min="25" max="100" value="36" step="1"></label>
+                  <label for="split-zoom-1">Bottom person · zoom <input type="range" id="split-zoom-1" min="25" max="100" value="36" step="1"></label>
+                  <button type="button" class="small-action" id="split-reset">Reset positions</button>
+                </div>
+              </div>
+              <div class="framing-card portrait-card">
+                <div class="framing-card-head"><strong>Vertical result</strong><span>9:16 preview</span></div>
+                <div class="portrait-preview" id="portrait-preview">
+                  <div class="portrait-pane"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><span class="portrait-placeholder">Your clip</span></div>
+                  <div class="portrait-pane"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><span class="portrait-placeholder">Framing preview</span></div>
+                </div>
+                <p class="helper-note">Preview uses your uploaded source. Final exports use full-resolution FFmpeg rendering.</p>
+              </div>
+            </div>
+            <div class="framing-extra"><label for="framing">Render mode</label><select id="framing"><option value="smart" selected>Smart · follow faces</option><option value="split">Split in two · manual positions</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
+          </div>
+          <div class="journey-panel" data-journey-panel="2" hidden>
           <div class="settings-heading"><span class="step">02</span><div><h2>Clip settings</h2><p>Select the format, length and exact number of shorts</p></div></div>
           <div class="settings-grid">
             <div class="field"><label for="clip-seconds">Clip length</label><select id="clip-seconds"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">120 seconds</option></select></div>
@@ -79,9 +126,18 @@
             <div class="field"><label for="brand-text">Channel text sticker (optional)</label><input type="text" id="brand-text" maxlength="36" placeholder="@yourchannel or channel name"></div>
             <div class="field"><label for="caption-style">Automatic captions</label><select id="caption-style"><option value="karaoke" selected>Karaoke · word highlights</option><option value="pop">Pop · word animation</option><option value="bold">Bold yellow</option><option value="classic">Classic white</option><option value="neon">Neon pink</option><option value="none">No captions</option></select></div>
             <div class="field"><label for="effect">Video effect</label><select id="effect"><option value="none">Natural</option><option value="pop" selected>Vibrant pop</option><option value="cinema">Cinematic</option><option value="noir">Black &amp; white</option></select></div>
-            <div class="field"><label for="framing">Vertical framing</label><select id="framing"><option value="smart" selected>Smart · follow faces</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
             <div class="field"><label for="hook-style">Opening headline</label><select id="hook-style"><option value="headline" selected>Show AI headline (3s)</option><option value="none">No opening headline</option></select></div>
           </div>
+          <div class="caption-presets"><strong>Caption look</strong><span>Visual samples · final words follow the actual audio</span><div class="caption-preset-grid" id="caption-preset-grid">
+            <button type="button" data-caption="karaoke"><span class="sample-karaoke">MAKE <b>IT COUNT</b></span><small>Karaoke</small></button>
+            <button type="button" data-caption="pop"><span class="sample-pop">BIG MOMENT</span><small>Dynamic pop</small></button>
+            <button type="button" data-caption="bold"><span class="sample-bold">NO WAY!</span><small>Impact</small></button>
+            <button type="button" data-caption="classic"><span class="sample-classic">The best part.</span><small>Classic</small></button>
+            <button type="button" data-caption="neon"><span class="sample-neon">WATCH THIS</span><small>Neon</small></button>
+            <button type="button" data-caption="none"><span class="sample-none">No subtitles</span><small>Original</small></button>
+          </div></div>
+          </div>
+          <div class="journey-panel" data-journey-panel="3" hidden>
           <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Commentator &amp; storytelling</h2><p>Scene-by-scene narration grounded in the full video, not just an intro</p></div></div>
           <div class="settings-grid">
             <div class="field"><label for="narration">Narration mode</label><select id="narration"><option value="none">Original audio only</option><option value="script">Generate AI script · no voice</option><option value="narrated">AI script + commentator voice</option></select></div>
@@ -91,9 +147,12 @@
           </div>
           <p class="helper-note" id="narration-notice">Commentator audio uses ElevenLabs when connected. The original track stays low under the voice.</p>
           <div class="ai-notice" id="ai-notice">AI selection and scripts use a local Ollama model. Voiceover is an optional external service.</div>
+          <div class="journey-review" id="journey-review" role="status"></div>
           <label class="rights"><input type="checkbox" id="rights"><span>I own or have permission to download, edit and republish this video.</span></label>
           <button type="button" class="create-button" id="create-button">✦ Generate clips <span>→</span></button>
           <div class="creator-footnote">Nothing posts automatically. Review your finished clips in the Library.</div>
+          </div>
+          <div class="journey-actions"><button type="button" id="journey-back" class="small-action" hidden>← Back</button><span id="journey-position">Step 1 of 4</span><button type="button" id="journey-next" class="create-button">Continue →</button></div>
           <div id="message" class="message" role="alert" hidden></div>
         </section>
         <div class="process-guide"><div><span class="guide-icon">↗</span><strong>Import</strong><small>Link or file</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⌁</span><strong>Discover</strong><small>Highlight scoring</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">♬</span><strong>Produce</strong><small>Captions + commentary</small></div><span class="guide-arrow">→</span><div><span class="guide-icon">⇩</span><strong>Review</strong><small>Library + publishing</small></div></div>
