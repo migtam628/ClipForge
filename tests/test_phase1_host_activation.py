@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -79,3 +81,31 @@ def test_previous_environment_can_be_restored_after_admin_setup(tmp_path):
     assert restore_env_revision(env, prior) == prior
     assert read_env(env)["CLIPFORGE_AI_MODEL"] == "llama3.2:3b"
     assert "CLIPFORGE_ADMIN_PASSWORD_HASH" not in env.read_text()
+
+
+def test_generated_systemd_unit_has_valid_absolute_paths(tmp_path):
+    """Regression: WorkingDirectory with literal quotes causes 'bad-setting'."""
+    script = (ROOT / "scripts" / "phase1-activate.sh").read_text()
+    opening = 'python3 - "$repo" "$unit_dir/clipforge-config-agent.service" <<\'PY\'\n'
+    assert script.count(opening) == 1
+    generator = script.split(opening, 1)[1].split("\nPY\n", 1)[0]
+    root = tmp_path / "ClipForge"
+    unit = tmp_path / "clipforge-config-agent.service"
+    python = root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    result = subprocess.run(
+        [sys.executable, "-", str(root), str(unit)],
+        input=generator, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    contents = unit.read_text()
+    assert f"WorkingDirectory={root}" in contents
+    assert f'WorkingDirectory="{root}"' not in contents
+    assert f"ExecStart={python} -m clipforge.config_agent --root {root}" in contents
+    if shutil.which("systemd-analyze"):
+        verified = subprocess.run(
+            ["systemd-analyze", "verify", str(unit)],
+            capture_output=True, text=True, check=False,
+        )
+        assert verified.returncode == 0, verified.stderr
