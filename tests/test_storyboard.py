@@ -1,4 +1,5 @@
 """Regression tests for scene-by-scene, content-grounded script generation."""
+import io
 import json
 import subprocess
 
@@ -193,7 +194,10 @@ def test_vision_retries_blank_response_with_different_frame(monkeypatch, tmp_pat
         "A person standing beside a red car."
     )
     assert sampled == [(source, 12.0), (source, 11.25)]
-    assert len(set(prompts)) == 2
+    assert prompts == [
+        "Describe this image in one short sentence.",
+        "What can you see in this image?",
+    ]
 
 
 def test_vision_refuses_to_fabricate_after_two_blank_frames(monkeypatch, tmp_path):
@@ -218,3 +222,68 @@ def test_vision_success_does_not_unnecessarily_retry(monkeypatch, tmp_path):
         "A street with shops."
     )
     assert seen == [10]
+
+
+def test_blank_ollama_vision_response_logs_safe_metadata(monkeypatch, caplog):
+    monkeypatch.setenv("CLIPFORGE_OLLAMA_URL", "http://ollama:11434")
+    result = {
+        "response": "", "done_reason": "stop", "eval_count": 0,
+        "prompt_eval_count": 745, "total_duration": 42_000_000_000,
+    }
+    monkeypatch.setattr(storyboard, "urlopen", lambda *_args, **_kwargs:
+                        io.BytesIO(json.dumps(result).encode()))
+    with caplog.at_level("WARNING", logger="uvicorn.error"):
+        assert storyboard._ollama({"model": "moondream", "prompt": "private prompt"},
+                                  vision=True) == ""
+    assert "done_reason=stop" in caplog.text
+    assert "output_tokens=0" in caplog.text
+    assert "prompt_tokens=745" in caplog.text
+    assert "duration_ms=42000" in caplog.text
+    assert "private prompt" not in caplog.text
+
+
+def test_video_frame_observations_survive_failed_resume(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"original video")
+    checkpoint = tmp_path / "narration-story.json"
+    sampled = []
+
+    def interrupted(_src, timestamp):
+        sampled.append(timestamp)
+        if len(sampled) == 2:
+            raise RuntimeError("temporary vision failure")
+        return "A small shop on a city street."
+
+    monkeypatch.setattr(storyboard, "_visual_evidence", interrupted)
+    with pytest.raises(RuntimeError, match="temporary vision failure"):
+        storyboard.build_storyboard([], 0, 12, "documentary", "en", checkpoint,
+                                    source=source, basis="video")
+    saved = json.loads((tmp_path / "narration-story-frames.json").read_text())
+    assert saved["observations"] == {"0": "A small shop on a city street."}
+
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda _src, timestamp: sampled.append(timestamp) or
+                        "A pedestrian beside the shop.")
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    result = storyboard.build_storyboard([], 0, 12, "documentary", "en", checkpoint,
+                                         source=source, basis="video")
+    assert len(result["beats"]) == 2
+    assert sampled == pytest.approx([3.0, 9.0, 9.0])
+
+
+def test_video_frame_cache_invalidates_on_source_change(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"v1")
+    checkpoint = tmp_path / "story.json"
+    sampled = []
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda _src, timestamp: sampled.append(timestamp) or "A street.")
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    for _ in range(2):
+        storyboard.build_storyboard([], 0, 12, "casual", "en", checkpoint,
+                                    source=source, basis="video")
+    assert sampled == pytest.approx([3.0, 9.0])
+    source.write_bytes(b"a different source video")
+    storyboard.build_storyboard([], 0, 12, "casual", "en", checkpoint,
+                                source=source, basis="video")
+    assert sampled == pytest.approx([3.0, 9.0, 3.0, 9.0])
