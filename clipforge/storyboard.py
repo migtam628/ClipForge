@@ -182,7 +182,7 @@ def _visual_evidence(source: Path, timestamp: float) -> str:
             ) from exc
         answer = _ollama({
             "model": model, "images": [picture], "prompt": prompt,
-            "stream": False, "think": False,
+            "stream": False,
             "options": {"temperature": 0.0, "num_predict": 180},
             "keep_alive": "5m",
         }, vision=True)
