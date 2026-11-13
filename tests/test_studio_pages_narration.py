@@ -22,6 +22,19 @@ def test_all_workspace_pages_are_navigable():
     assert "Generate AI script" in client.get("/studio").text
 
 
+def test_guided_creation_flow_is_backed_by_real_framing_fields():
+    html = client.get("/studio").text
+    js = client.get("/assets/app.js").text
+    for step in range(4):
+        assert f'data-journey-panel="{step}"' in html
+    assert 'id="framing-source"' in html
+    assert 'id="portrait-preview"' in html
+    assert 'value="split"' in html
+    assert 'data-framing="split"' in html
+    assert "split_boxes: splitBoxes.map" in js
+    assert "data.set(k," in js
+
+
 def test_sidebar_version_is_read_from_backend():
     """The UI must not display a stale hardcoded release version."""
     html = client.get("/studio").text

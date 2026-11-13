@@ -163,10 +163,40 @@ def render_clip(
     voiceover: Path | None = None, has_source_audio: bool = True,
     hook: Path | None = None, smart_track: Path | None = None,
     brand: Path | None = None,
+    split_boxes: list[dict[str, float]] | None = None,
 ) -> None:
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
-    if framing == "crop":
+    if framing == "split":
+        if ratio != "9:16":
+            raise ValueError("Split-screen rendering requires 9:16")
+        boxes = split_boxes or [
+            {"x": 0.04, "y": 0.21, "width": 0.36, "height": 0.58},
+            {"x": 0.60, "y": 0.21, "width": 0.36, "height": 0.58},
+        ]
+        if len(boxes) != 2:
+            raise ValueError("Split-screen requires exactly two crop boxes")
+        regions = []
+        for box in boxes:
+            x, y, bw, bh = (float(box[k]) for k in ("x", "y", "width", "height"))
+            if not all(math.isfinite(v) for v in (x, y, bw, bh)) or not (
+                0 <= x <= 1 and 0 <= y <= 1 and 0.05 < bw <= 1 and 0.05 < bh <= 1
+                and x + bw <= 1.000001 and y + bh <= 1.000001
+            ):
+                raise ValueError("Invalid split-screen crop box")
+            regions.append(
+                f"crop=w=trunc(iw*{bw:.6f}/2)*2:h=trunc(ih*{bh:.6f}/2)*2:"
+                f"x=iw*{x:.6f}:y=ih*{y:.6f},"
+                f"scale={w}:{h // 2}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h // 2},setsar=1"
+            )
+        vf = (
+            "split=2[upper][lower];"
+            f"[upper]{regions[0]}[top];"
+            f"[lower]{regions[1]}[bottom];"
+            "[top][bottom]vstack=inputs=2,setsar=1"
+        )
+    elif framing == "crop":
         vf = (
             f"scale={w}:{h}:force_original_aspect_ratio=increase,"
             f"crop={w}:{h},setsar=1"

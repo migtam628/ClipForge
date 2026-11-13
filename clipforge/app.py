@@ -20,7 +20,7 @@ from typing import Literal
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from clipforge import __version__, admin_auth
 from clipforge.ai import ai_capabilities, select_ai_highlights, transcribe
@@ -106,6 +106,28 @@ class EnvironmentUpdate(BaseModel):
     changes: dict[str, str] = Field(min_length=1, max_length=24)
 
 
+class SplitBox(BaseModel):
+    """Normalized source-video rectangle for a stacked reaction layout."""
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0.05, le=1)
+    height: float = Field(gt=0.05, le=1)
+
+    @model_validator(mode="after")
+    def within_frame(self):
+        if self.x + self.width > 1.000001 or self.y + self.height > 1.000001:
+            raise ValueError("Split boxes must stay inside the original video")
+        return self
+
+
+def default_split_boxes() -> list[SplitBox]:
+    return [
+        SplitBox(x=0.04, y=0.21, width=0.36, height=0.58),
+        SplitBox(x=0.60, y=0.21, width=0.36, height=0.58),
+    ]
+
+
 class Options(BaseModel):
     clip_seconds: int = Field(default=30, ge=10, le=120)
     max_clips: int = Field(default=25, ge=1, le=100)
@@ -113,7 +135,9 @@ class Options(BaseModel):
     selection_mode: Literal["ai", "energy"] = "energy"
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop", "smart", "blur"] = "pad"
+    framing: Literal["pad", "crop", "smart", "blur", "split"] = "pad"
+    split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
+                                       min_length=2, max_length=2)
     hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
@@ -127,6 +151,12 @@ class Options(BaseModel):
     use_voice_markers: bool = True
     brand_text: str = Field(default="", max_length=36)
 
+    @model_validator(mode="after")
+    def valid_split_format(self):
+        if self.framing == "split" and self.aspect_ratio != "9:16":
+            raise ValueError("Split-screen framing requires the 9:16 vertical format")
+        return self
+
 
 class CreatorProfile(BaseModel):
     name: str = Field(min_length=1, max_length=40)
@@ -138,7 +168,7 @@ class CreatorProfile(BaseModel):
     caption_style: Literal[
         "none", "classic", "bold", "neon", "karaoke", "pop",
     ] = "karaoke"
-    framing: Literal["pad", "crop", "smart", "blur"] = "smart"
+    framing: Literal["pad", "crop", "smart", "blur", "split"] = "smart"
     effect: Literal["none", "pop", "cinema", "noir"] = "pop"
     hook_style: Literal["none", "headline"] = "headline"
     use_voice_markers: bool = True
@@ -163,7 +193,9 @@ class ClipEditRequest(BaseModel):
     duration: float = Field(ge=3, le=120)
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
-    framing: Literal["pad", "crop", "smart", "blur"] = "crop"
+    framing: Literal["pad", "crop", "smart", "blur", "split"] = "crop"
+    split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
+                                       min_length=2, max_length=2)
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
@@ -496,6 +528,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     framing=opts.framing, voiceover=voiceover,
                     has_source_audio=info["has_audio"], hook=hook_file,
                     smart_track=smart_track, brand=brand_file,
+                    split_boxes=[box.model_dump() for box in opts.split_boxes],
                 )
                 os.replace(partial, destination)
                 try:
@@ -506,6 +539,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "filename": filename, "thumbnail": thumbnail, "number": index,
                     "captions_added": subtitles is not None, "effect": opts.effect,
                     "framing": opts.framing, "narration": opts.narration,
+                    "split_boxes": [box.model_dump() for box in opts.split_boxes]
+                    if opts.framing == "split" else [],
                     "script": script, "voiceover_added": voiceover is not None,
                     "storyboard": storyboard["beats"] if storyboard else [],
                     "analysis_basis": storyboard["analysis_basis"] if storyboard else None,
@@ -800,6 +835,7 @@ async def submit_upload_batch(
     caption_style: str = Form("none"),
     effect: str = Form("none"),
     framing: str = Form("pad"),
+    split_boxes: str = Form(""),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -821,12 +857,13 @@ async def submit_upload_batch(
             aspect_ratio=aspect_ratio, selection_mode=selection_mode,
             caption_style=caption_style, effect=effect,
             framing=framing, hook_style=hook_style,
+            **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
             clip_focus=clip_focus, content_niche=content_niche,
             use_voice_markers=use_voice_markers, brand_text=brand_text,
         )
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
     if options.narration == "narrated" and not voice_spend_approved:
         raise HTTPException(400, "Approve possible voice API charges for batch narration")
@@ -886,6 +923,7 @@ async def submit_upload(
     caption_style: str = Form("none"),
     effect: str = Form("none"),
     framing: str = Form("pad"),
+    split_boxes: str = Form(""),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -904,12 +942,13 @@ async def submit_upload(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
             effect=effect, framing=framing, hook_style=hook_style,
+            **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
             clip_focus=clip_focus, content_niche=content_niche,
             use_voice_markers=use_voice_markers, brand_text=brand_text,
         )
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
         raise HTTPException(422, str(exc)) from exc
     if Path(file.filename or "").suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm"}:
         raise HTTPException(400, "Upload MP4, MOV, MKV, or WEBM video")
@@ -1192,6 +1231,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
             smart_track=smart_track, brand=brand_file,
+            split_boxes=[box.model_dump() for box in edit.split_boxes],
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1227,6 +1267,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 key: target.get(key) for key in (
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
+                    "split_boxes",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
                 )
@@ -1235,6 +1276,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 filename=destination.name, thumbnail=thumbnail,
                 start=round(edit.start, 2), duration=round(edit.duration, 2),
                 title=edit.title.strip(), effect=edit.effect, framing=edit.framing,
+                split_boxes=[box.model_dump() for box in edit.split_boxes]
+                if edit.framing == "split" else [],
                 captions_added=subtitles is not None,
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",

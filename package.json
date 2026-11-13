@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "description": "Local ClipForge frontend preview against the real FastAPI app",
+  "scripts": {
+    "dev": "node scripts/preview.mjs"
+  }
+}

@@ -75,3 +75,43 @@ def test_ffmpeg_render_and_probe(tmp_path):
     assert dest.stat().st_size > 500
     result = probe(dest)
     assert 1.5 <= result["duration"] <= 2.5
+
+
+def test_split_screen_renders_two_source_regions(tmp_path):
+    """Stacked reactions contain the chosen left/right source regions, not duplicates."""
+    source = tmp_path / "reaction.mp4"
+    output = tmp_path / "vertical.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=red:size=160x180:rate=8:duration=2",
+        "-f", "lavfi", "-i", "color=blue:size=160x180:rate=8:duration=2",
+        "-filter_complex", "[0:v][1:v]hstack=inputs=2[v]",
+        "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True, capture_output=True)
+    render_clip(source, output, 0, 1.5, "9:16", framing="split", split_boxes=[
+        {"x": 0, "y": 0, "width": 0.5, "height": 1},
+        {"x": 0.5, "y": 0, "width": 0.5, "height": 1},
+    ])
+    assert output.stat().st_size > 500
+    dimensions = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output),
+    ], capture_output=True, text=True, check=True)
+    assert dimensions.stdout.strip() == "720,1280"
+    sample = subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(output),
+        "-vf", "select=eq(n\\,0),scale=1:2:flags=area,format=rgb24",
+        "-frames:v", "1", "-f", "rawvideo", "pipe:1",
+    ], capture_output=True, check=True)
+    top, bottom = sample.stdout[:3], sample.stdout[3:6]
+    assert top[0] > top[2] + 100
+    assert bottom[2] > bottom[0] + 100
+
+
+def test_split_render_rejects_invalid_coordinates(tmp_path):
+    with pytest.raises(ValueError, match="Invalid split-screen crop box"):
+        render_clip(tmp_path / "unused.mp4", tmp_path / "unused-output.mp4",
+                    0, 2, "9:16", framing="split", split_boxes=[
+                        {"x": 0.9, "y": 0, "width": 0.2, "height": 1},
+                        {"x": 0.2, "y": 0, "width": 0.5, "height": 1},
+                    ])

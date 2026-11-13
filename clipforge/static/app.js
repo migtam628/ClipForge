@@ -44,6 +44,226 @@ for (const item of document.querySelectorAll('.nav-link[data-page]')) {
 $('url-tab').addEventListener('click', () => toggleTab('url'));
 $('upload-tab').addEventListener('click', () => toggleTab('upload'));
 $('create-button').addEventListener('click', createJob);
+// Guided four-step creation. All options continue using the existing job API.
+let journeyStep = 0;
+let previewObjectUrl = null;
+let splitBoxes = [
+  {x: 0.04, y: 0.21, width: 0.36, height: 0.58},
+  {x: 0.60, y: 0.21, width: 0.36, height: 0.58}
+];
+const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
+
+function validateJourneySource() {
+  if (activeTab === 'upload') return chosenVideoFiles().length > 0 ||
+    (notify('Choose a video file to continue.'), false);
+  return Boolean($('url').value.trim() || $('url-list').value.trim()) ||
+    (notify('Paste a video URL to continue.'), false);
+}
+
+function setJourneyStep(step) {
+  if (step > 0 && !validateJourneySource()) return;
+  journeyStep = clamp(step, 0, 3);
+  document.querySelectorAll('[data-journey-panel]').forEach((panel) => {
+    panel.hidden = Number(panel.dataset.journeyPanel) !== journeyStep;
+  });
+  document.querySelectorAll('[data-journey]').forEach((button) => {
+    const index = Number(button.dataset.journey);
+    button.classList.toggle('is-active', index === journeyStep);
+    button.classList.toggle('is-done', index < journeyStep);
+    if (index === journeyStep) button.setAttribute('aria-current', 'step');
+    else button.removeAttribute('aria-current');
+  });
+  $('journey-back').hidden = journeyStep === 0;
+  $('journey-next').hidden = journeyStep === 3;
+  $('journey-position').textContent = `Step ${journeyStep + 1} of 4`;
+  if (journeyStep === 3) updateJourneyReview();
+  notify('');
+}
+
+function updateJourneyReview() {
+  const source = activeTab === 'upload'
+    ? `${chosenVideoFiles().length} local video(s)`
+    : `${($('url-list').value.trim().split(/\r?\n/).filter(Boolean).length || 1)} video URL(s)`;
+  const count = $('max-clips').value === 'custom'
+    ? $('custom-max-clips').value : $('max-clips').value;
+  const label = $('framing').selectedOptions[0]?.textContent || $('framing').value;
+  const narration = $('narration').selectedOptions[0]?.textContent || $('narration').value;
+  $('journey-review').replaceChildren();
+  for (const [key, value] of [
+    ['Source', source], ['Output', `${count} clips · ${$('clip-seconds').value}s · ${$('aspect-ratio').value}`],
+    ['Framing', label], ['Captions', $('caption-style').value],
+    ['Narration', narration]
+  ]) {
+    const line = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = key;
+    const text = document.createElement('span');
+    text.textContent = value;
+    line.append(strong, text);
+    $('journey-review').append(line);
+  }
+}
+
+document.querySelectorAll('[data-journey]').forEach((button) =>
+  button.addEventListener('click', () => setJourneyStep(Number(button.dataset.journey))));
+$('journey-next').addEventListener('click', () => setJourneyStep(journeyStep + 1));
+$('journey-back').addEventListener('click', () => setJourneyStep(journeyStep - 1));
+
+function resetSplitBoxes() {
+  splitBoxes = [
+    {x: 0.04, y: 0.21, width: 0.36, height: 0.58},
+    {x: 0.60, y: 0.21, width: 0.36, height: 0.58}
+  ];
+  $('split-zoom-0').value = 36;
+  $('split-zoom-1').value = 36;
+  renderFraming();
+}
+
+function renderFraming() {
+  const split = $('framing').value === 'split';
+  $('split-selection').hidden = !split;
+  $('split-controls').hidden = !split;
+  $('portrait-preview').classList.toggle('is-split', split);
+  document.querySelectorAll('[data-framing]').forEach((button) => {
+    button.classList.toggle('is-chosen', button.dataset.framing === $('framing').value);
+    button.setAttribute('aria-pressed', String(button.dataset.framing === $('framing').value));
+  });
+  splitBoxes.forEach((box, i) => {
+    const target = document.querySelector(`[data-crop="${i}"]`);
+    Object.assign(target.style, {
+      left: `${box.x * 100}%`, top: `${box.y * 100}%`,
+      width: `${box.width * 100}%`, height: `${box.height * 100}%`
+    });
+    const video = $(i === 0 ? 'portrait-video-a' : 'portrait-video-b');
+    if (split && previewObjectUrl) {
+      Object.assign(video.style, {
+        width: `${100 / box.width}%`, height: `${100 / box.height}%`,
+        left: `${-100 * box.x / box.width}%`, top: `${-100 * box.y / box.height}%`,
+        objectFit: 'fill'
+      });
+    } else {
+      Object.assign(video.style, {
+        width: '100%', height: '100%', left: '0', top: '0',
+        objectFit: $('framing').value === 'pad' ? 'contain' : 'cover'
+      });
+    }
+  });
+  $('framing-instructions').textContent = split
+    ? 'Drag the colored boxes over each person. Use the zoom sliders to resize; arrow keys fine-tune a selected box.'
+    : 'Switch layouts to compare how the same source will be framed.';
+}
+
+function loadSourcePreview() {
+  if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+  previewObjectUrl = null;
+  const files = chosenVideoFiles();
+  if (activeTab === 'upload' && files.length === 1) {
+    previewObjectUrl = URL.createObjectURL(files[0]);
+  }
+  for (const id of ['framing-source', 'portrait-video-a', 'portrait-video-b']) {
+    const video = $(id);
+    video.pause();
+    video.hidden = !previewObjectUrl;
+    video.removeAttribute('src');
+    if (previewObjectUrl) {
+      video.src = previewObjectUrl;
+      video.load();
+      video.play().catch(() => {});
+    }
+  }
+  document.querySelectorAll('.portrait-placeholder').forEach((node) => {
+    node.hidden = Boolean(previewObjectUrl);
+  });
+  $('framing-empty').hidden = Boolean(previewObjectUrl);
+  $('framing-source-label').textContent = previewObjectUrl ? files[0].name :
+    'URL and batch sources are previewed after import';
+  $('framing-stage').style.aspectRatio = '16 / 9';
+  renderFraming();
+}
+
+$('framing-source').addEventListener('loadedmetadata', () => {
+  const source = $('framing-source');
+  if (source.videoWidth && source.videoHeight) {
+    $('framing-stage').style.aspectRatio = `${source.videoWidth} / ${source.videoHeight}`;
+  }
+});
+
+document.querySelectorAll('[data-framing]').forEach((button) =>
+  button.addEventListener('click', () => { $('framing').value = button.dataset.framing;
+    if (button.dataset.framing === 'split') $('aspect-ratio').value = '9:16';
+    renderFraming();
+  }));
+$('framing').addEventListener('change', () => {
+  if ($('framing').value === 'split') $('aspect-ratio').value = '9:16';
+  renderFraming();
+});
+$('aspect-ratio').addEventListener('change', () => {
+  if ($('framing').value === 'split' && $('aspect-ratio').value !== '9:16') {
+    $('framing').value = 'smart';
+    notify('Split in two is available for 9:16 clips; switched framing to Auto focus.');
+  }
+  renderFraming();
+});
+$('split-reset').addEventListener('click', resetSplitBoxes);
+
+for (const i of [0, 1]) {
+  const button = document.querySelector(`[data-crop="${i}"]`);
+  let point = null;
+  button.addEventListener('pointerdown', (event) => {
+    if ($('framing').value !== 'split') return;
+    point = {x: event.clientX, y: event.clientY};
+    button.setPointerCapture(event.pointerId);
+  });
+  button.addEventListener('pointermove', (event) => {
+    if (!point) return;
+    const stage = $('framing-stage').getBoundingClientRect();
+    const box = splitBoxes[i];
+    box.x = clamp(box.x + (event.clientX - point.x) / stage.width, 0, 1 - box.width);
+    box.y = clamp(box.y + (event.clientY - point.y) / stage.height, 0, 1 - box.height);
+    point = {x: event.clientX, y: event.clientY};
+    renderFraming();
+  });
+  const stop = () => { point = null; };
+  button.addEventListener('pointerup', stop);
+  button.addEventListener('pointercancel', stop);
+  button.addEventListener('lostpointercapture', stop);
+  button.addEventListener('keydown', (event) => {
+    const delta = {ArrowLeft: [-.02, 0], ArrowRight: [.02, 0],
+      ArrowUp: [0, -.02], ArrowDown: [0, .02]}[event.key];
+    if (!delta) return;
+    event.preventDefault();
+    splitBoxes[i].x = clamp(splitBoxes[i].x + delta[0], 0, 1 - splitBoxes[i].width);
+    splitBoxes[i].y = clamp(splitBoxes[i].y + delta[1], 0, 1 - splitBoxes[i].height);
+    renderFraming();
+  });
+  $(`split-zoom-${i}`).addEventListener('input', (event) => {
+    const box = splitBoxes[i];
+    const source = $('framing-source');
+    const ratio = source.videoWidth && source.videoHeight
+      ? source.videoWidth / source.videoHeight : 16 / 9;
+    const w = Number(event.target.value) / 100;
+    const h = Math.min(1, w * ratio / (720 / 640));
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    Object.assign(box, {width: w, height: h,
+      x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h)});
+    renderFraming();
+  });
+}
+
+$('caption-style').addEventListener('change', () => {
+  document.querySelectorAll('[data-caption]').forEach((button) => {
+    button.classList.toggle('is-chosen', button.dataset.caption === $('caption-style').value);
+    button.setAttribute('aria-pressed', String(button.dataset.caption === $('caption-style').value));
+  });
+});
+document.querySelectorAll('[data-caption]').forEach((button) =>
+  button.addEventListener('click', () => {
+    $('caption-style').value = button.dataset.caption;
+    $('caption-style').dispatchEvent(new Event('change'));
+  }));
+$('caption-style').dispatchEvent(new Event('change'));
+renderFraming();
 $('save-creator-profile').addEventListener('click', saveCreatorProfile);
 $('creator-profile-select').addEventListener('change', applyCreatorProfile);
 for (const button of document.querySelectorAll('[data-refresh]')) {
@@ -64,6 +284,7 @@ function updateUploadSelection() {
   $('batch-selection-hint').textContent =
     sources.length > 1 ? sources.length + ' videos selected. ClipForge processes them sequentially, one checkpointed job per source.' :
     'Videos are queued one at a time for CPU-friendly processing. Each keeps its own retry checkpoints.';
+  loadSourcePreview();
 }
 $('file').addEventListener('change', () => { $('folder').value = ''; updateUploadSelection(); });
 $('folder').addEventListener('change', () => { $('file').value = ''; updateUploadSelection(); });
@@ -95,6 +316,7 @@ function toggleTab(tab) {
     $(item + '-tab').classList.toggle('active', item === tab);
     $(item + '-tab').setAttribute('aria-selected', String(item === tab));
   }
+  loadSourcePreview();
 }
 
 function notify(text) {
@@ -126,6 +348,7 @@ async function createJob() {
     caption_style: $('caption-style').value,
     effect: $('effect').value,
     framing: $('framing').value,
+    split_boxes: splitBoxes.map((box) => ({...box})),
     hook_style: $('hook-style').value,
     narration: $('narration').value,
     narration_style: $('narration-style').value,
@@ -168,7 +391,8 @@ async function createJob() {
     if (options.narration === 'narrated' && files.length > 1 &&
         !confirm('Narrating all ' + files.length + ' sources can incur ElevenLabs charges. Approve this batch?')) return;
     const data = new FormData();
-    for (const [k, v] of Object.entries(options)) data.set(k, String(v));
+    for (const [k, v] of Object.entries(options)) data.set(k,
+      typeof v === 'object' ? JSON.stringify(v) : String(v));
     endpoint = files.length > 1 ? '/api/uploads/batch' : '/api/uploads';
     if (files.length > 1) {
       data.set('voice_spend_approved', String(options.narration === 'narrated'));
@@ -255,7 +479,8 @@ function buildClipEditor(job, clip) {
 
   const framing = dropdown('Framing', [
     ['smart', 'Smart · follow faces'], ['blur', 'Blurred background'],
-    ['crop', 'Centered crop'], ['pad', 'Keep full frame']
+    ['crop', 'Centered crop'], ['pad', 'Keep full frame'],
+    ...(job.options.aspect_ratio === '9:16' ? [['split', 'Two-person reaction split']] : [])
   ], clip.framing || job.options.framing);
 
   const captions = dropdown('Captions', [
@@ -327,6 +552,8 @@ function buildClipEditor(job, clip) {
     const settings = {
       start: begin, duration: span, title: title.value.trim(),
       effect: effect.value, framing: framing.value,
+      split_boxes: clip.split_boxes?.length === 2 ? clip.split_boxes :
+        job.options.split_boxes,
       caption_style: captions.value, hook_style: hook.value,
       script: script.value.trim(), voiceover: voice.checked,
       brand_text: brandText.value.trim(),
@@ -466,6 +693,7 @@ function card(job, mode = currentPage) {
       if (clip.voice_marker) tagTarget.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
       if (clip.brand_text) tagTarget.append(el('span', 'clip-tag', '◇ ' + clip.brand_text));
       if (clip.face_tracking) tagTarget.append(el('span', 'clip-tag', '◉ Face-aware crop'));
+      if (clip.framing === 'split') tagTarget.append(el('span', 'clip-tag', 'Two-person split'));
       else if (clip.framing === 'smart') tagTarget.append(el('span', 'clip-tag', 'Centered fallback'));
       if (clip.revision_count) tagTarget.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
       if (clip.revision_state === 'queued' || clip.revision_state === 'rendering')
@@ -1032,6 +1260,11 @@ function applyDefaults(defaults, prefix) {
       updateCustomCount();
     } else if (item.type === 'checkbox') item.checked = Boolean(defaults[key]);
     else item.value = String(defaults[key]);
+  }
+  if (!prefix) {
+    if ($('framing').value === 'split') $('aspect-ratio').value = '9:16';
+    renderFraming();
+    $('caption-style').dispatchEvent(new Event('change'));
   }
 }
 
