@@ -170,6 +170,20 @@ without downloading a vision model. Silent footage requires video analysis
 rather than speech-only mode, and speech-based highlight ranking still needs
 audio. Existing completed clips aren't retroactively changed.
 
+**Slow CPU vision and recovery:** The default Moondream prompt uses the short
+single-sentence request successfully verified against a real source frame.
+If a model returns blank text, ClipForge logs its finish reason, output-token
+count and duration (never the frame or prompt) and tries a nearby frame with
+a second short prompt. Each successful observation is checkpointed as text in
+the job's private narration directory; a failed or interrupted job can resume
+without reanalyzing already-observed windows. Checkpoints are invalidated
+when the source file, selected timing, vision model or prompt version changes.
+No images are retained. CPU-only Moondream may take **two minutes or more per
+sampled frame**, so a 60-second clip with eight narration windows can take
+over 15 minutes for its visual pass alone. See the container logs for
+`Narration visual evidence ready: window N/M` while waiting; avoid repeatedly
+resuming a job that is still processing.
+
 **Limitations:** This is a still-frame sampler, not motion recognition or
 continuous shot-by-shot video understanding. It can miss quick events or
 misdescribe images. Review the timed script against the clip and correct
