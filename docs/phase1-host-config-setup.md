@@ -83,6 +83,28 @@ bash scripts/phase1-activate.sh --verify
 A broken host agent affects the privileged Settings editor; it does not mean
 the existing clip-processing Docker containers or Ollama are down.
 
+### Docker starts but the immediate health request resets
+
+Successful Docker image builds and "Container Started" output do not prove that
+ClipForge's API is already ready. `curl: (56) Recv failure: Connection reset by peer`
+immediately after Docker recreation can be a temporary startup issue or a process crash.
+
+The updated activation helper now retries `/api/health` for a bounded interval.
+If the API never responds, it prints container status and recent logs, and
+does not attempt another restart.
+
+After an already-successful Docker rebuild, first use read-only diagnostics:
+
+```bash
+cd ~/ClipForge
+docker compose --profile ai ps
+curl -v --max-time 10 http://127.0.0.1:8765/api/health
+docker compose --profile ai logs --tail=80 --no-color clipforge
+```
+
+If the API responds, pull the updated helper and run
+`bash scripts/phase1-activate.sh --verify` instead of rebuilding again.
+Do not remove existing volumes or repeatedly restart without reading logs.
 ### Agent active but socket initially missing
 
 The systemd user service may enter `active (running)` before the Python
