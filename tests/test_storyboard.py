@@ -113,10 +113,97 @@ def test_non_evidenced_windows_are_silent(tmp_path, monkeypatch):
 
 def test_storyboard_rejects_malformed_ai_timeline(tmp_path, monkeypatch):
     monkeypatch.setattr(storyboard, "_ollama", lambda *_: '{"beats":[{"id":0,"text":"a"}]}')
-    with pytest.raises(RuntimeError, match="invalid timed script"):
+    with pytest.raises(RuntimeError, match="could not return valid timed narration"):
         storyboard.build_storyboard(
             evidence(), 0, 30, "casual", "en", tmp_path / "bad.json",
         )
+
+
+def test_truncated_timed_script_pair_falls_back_to_individual_beats(tmp_path, monkeypatch):
+    calls = []
+
+    def respond(payload, **_kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        calls.append([item["id"] for item in batch])
+        assert len(batch) <= 2
+        assert payload["format"]["properties"]["beats"]["maxItems"] == len(batch)
+        if calls[-1] == [0, 1]:
+            return '{"beats":[{"id":0,"text":"unfinished'
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "Narrated from this window's evidence."}
+            for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", respond)
+    output = storyboard.build_storyboard(
+        evidence(), 0, 30, "documentary", "en", tmp_path / "scene.json",
+    )
+    assert len(output["beats"]) == 4
+    assert all(beat["text"] for beat in output["beats"])
+    assert calls == [[0, 1], [0], [1], [2, 3]]
+
+
+def test_timed_script_drafts_survive_failure_without_regeneration(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "script.json"
+    first_calls = []
+
+    def fail_second_batch(payload, **_kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        ids = [item["id"] for item in batch]
+        first_calls.append(ids)
+        if ids[0] >= 2:
+            return '{"beats":[{"id":2,"text":"incomplete'
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "First saved narration."} for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", fail_second_batch)
+    with pytest.raises(RuntimeError, match="could not return valid timed narration"):
+        storyboard.build_storyboard(evidence(), 0, 30, "casual", "en", checkpoint)
+    saved = json.loads((tmp_path / "script-draft.json").read_text())
+    assert sorted(saved["texts"]) == ["0", "1"]
+    assert first_calls == [[0, 1], [2, 3], [2]]
+
+    next_calls = []
+
+    def finish_remaining(payload, **_kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        next_calls.append([item["id"] for item in batch])
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "Recovered later narration."} for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", finish_remaining)
+    output = storyboard.build_storyboard(evidence(), 0, 30, "casual", "en", checkpoint)
+    assert next_calls == [[2, 3]]
+    assert output["beats"][0]["text"] == "First saved narration."
+    assert output["beats"][-1]["text"] == "Recovered later narration."
+
+
+def test_existing_v3_frame_observations_are_reused_after_script_update(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"original video")
+    checkpoint = tmp_path / "clip-001-story.json"
+    windows = storyboard.time_windows(12)
+    stat = source.stat()
+    import hashlib
+
+    signature = hashlib.sha256(json.dumps([
+        3, str(source.resolve()), stat.st_size, stat.st_mtime_ns,
+        "moondream", 0, 12, windows,
+    ], sort_keys=True).encode()).hexdigest()
+    (tmp_path / "clip-001-story-frames.json").write_text(json.dumps({
+        "signature": signature,
+        "observations": {"0": "A storefront.", "1": "A pedestrian."},
+    }))
+    monkeypatch.setenv("CLIPFORGE_VISION_MODEL", "moondream")
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda *_: pytest.fail("Old frame cache was ignored"))
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    output = storyboard.build_storyboard([], 0, 12, "casual", "en", checkpoint,
+                                         source=source, basis="video")
+    assert len(output["beats"]) == 2
 
 
 def test_timed_voice_assembly_and_captions_reach_last_scene(tmp_path, monkeypatch):
