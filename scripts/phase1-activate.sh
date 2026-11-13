@@ -40,6 +40,27 @@ print("Queue verified idle:", len(jobs), "finished jobs")
 PY
 }
 
+wait_api_ready() {
+  # Docker "Started" means the container process launched, not that Uvicorn
+  # finished importing and recovering its in-process job queue.
+  local attempt
+  for attempt in {1..45}; do
+    if curl --silent --fail --max-time 3 \
+        http://127.0.0.1:8765/api/health >/dev/null 2>&1; then
+      curl --fail --silent --show-error --max-time 10 \
+        http://127.0.0.1:8765/api/health
+      printf '\n'
+      return 0
+    fi
+    sleep 2
+  done
+  echo "ClipForge did not become API-ready after container startup." >&2
+  echo "No further Docker restarts were attempted; diagnostics follow." >&2
+  docker compose --profile ai ps >&2 || true
+  docker compose --profile ai logs --tail=60 --no-color clipforge >&2 || true
+  return 1
+}
+
 case "$action" in
   --prepare)
     [[ "$(git branch --show-current)" == "main" ]] || {
@@ -144,8 +165,8 @@ PY
     }
     docker compose --profile ai config -q
     docker compose --profile ai up -d --build --no-deps clipforge
-    echo "Checking app health..."
-    curl -fsS --max-time 15 http://127.0.0.1:8765/api/health
+    echo "Waiting for ClipForge API readiness..."
+    wait_api_ready
     printf '\nChecking appearance and Settings UI...\n'
     local_settings_html="$(curl -fsS --max-time 15 http://127.0.0.1:8765/settings)"
     [[ "$local_settings_html" == *'id="appearance-theme"'* ]] || {
@@ -166,8 +187,7 @@ PY
     echo "DEPLOYED — Themes, Settings and host agent connection verified."
     ;;
   --verify)
-    curl -fsS --max-time 15 http://127.0.0.1:8765/api/health
-    printf '\n'
+    wait_api_ready
     docker compose --profile ai ps
     if [[ -S private-auth/config-agent.sock ]]; then
       echo "Host config agent socket: present"

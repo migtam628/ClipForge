@@ -124,3 +124,58 @@ def test_agent_activation_waits_for_real_socket_and_checks_container_access():
     assert script.count("docker compose --profile ai exec -T clipforge python -") >= 2
     assert "Container-to-host environment agent: connected" in script
     assert "Settings environment agent: connected" in script
+
+
+def test_activation_retries_transient_api_startup_errors():
+    """API readiness must tolerate early connection resets after Docker recreation."""
+    script = (ROOT / "scripts" / "phase1-activate.sh").read_text()
+    assert "for attempt in {1..45}; do" in script
+    assert "wait_api_ready" in script
+    assert script.index("docker compose --profile ai up -d --build --no-deps clipforge") < (
+        script.index('    wait_api_ready', script.index('  --deploy)'))
+    )
+    # Execute the real Bash function with fake curl; two resets then success.
+    function = script.split("wait_api_ready() {", 1)[1].split(
+        '\ncase "$action" in\n  --prepare)', 1
+    )[0]
+    code = """count=0
+curl() {
+  count=$((count + 1))
+  if [ "$count" -le 2 ]; then return 56; fi
+  if [ "$count" -gt 3 ]; then printf '{"status":"ok"}'; fi
+  return 0
+}
+sleep() { :; }
+docker() { echo "Diagnostics should not run" >&2; return 1; }
+wait_api_ready() {""" + function + """
+wait_api_ready
+printf 'curl_calls=%s\n' "$count"
+"""
+    result = subprocess.run(
+        ["bash", "-c", code], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
+    assert '"status":"ok"' in result.stdout
+    assert "curl_calls=4" in result.stdout
+    assert "Diagnostics should not run" not in result.stderr
+
+
+def test_activation_does_not_restart_when_health_never_responds():
+    script = (ROOT / "scripts" / "phase1-activate.sh").read_text()
+    function = script.split("wait_api_ready() {", 1)[1].split(
+        '\ncase "$action" in\n  --prepare)', 1
+    )[0]
+    code = """curl() { return 56; }
+sleep() { :; }
+docker() { printf 'docker diagnostics: %s\n' "$*" >&2; }
+wait_api_ready() {""" + function + """
+wait_api_ready
+"""
+    result = subprocess.run(
+        ["bash", "-c", code], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 1
+    assert "did not become API-ready" in result.stderr
+    assert "docker diagnostics: compose --profile ai ps" in result.stderr
+    assert "docker diagnostics: compose --profile ai logs" in result.stderr
+    assert "up -d" not in result.stderr
