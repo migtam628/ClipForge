@@ -17,6 +17,8 @@ def test_po_provider_sidecar_is_pinned_and_not_published():
     assert "\n    ports:\n" not in sidecar
     assert '"4416"' in sidecar
     assert "healthcheck:" in sidecar
+    # Deno 2.9 `deno eval` has implicit permissions and rejects --allow-net.
+    assert "--allow-net" not in sidecar
     assert "service_healthy" in compose
     assert "bgutil-ytdlp-pot-provider==2.0.2" in (root / "pyproject.toml").read_text()
 
