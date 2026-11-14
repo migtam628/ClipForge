@@ -1,10 +1,24 @@
 """Authorized YouTube imports use isolated, disposable cookie sessions."""
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
 from clipforge import app as module
 from clipforge import import_auth
 from clipforge.engine import download_video
+
+
+def test_po_provider_sidecar_is_pinned_and_not_published():
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "compose.yaml").read_text()
+    sidecar = compose.split("\n  yt-pot-provider:\n", 1)[1].split("\n  ollama:", 1)[0]
+    assert "brainicism/bgutil-ytdlp-pot-provider:2.0.2-deno" in sidecar
+    assert "\n    ports:\n" not in sidecar
+    assert '"4416"' in sidecar
+    assert "healthcheck:" in sidecar
+    assert "service_healthy" in compose
+    assert "bgutil-ytdlp-pot-provider==2.0.2" in (root / "pyproject.toml").read_text()
 
 
 def make_cookies(path):
@@ -110,6 +124,78 @@ def test_download_uses_temp_cookies_for_youtube_only(monkeypatch, tmp_path):
     assert download_video("https://vimeo.com/123", tmp_path).exists()
     assert not calls[1].get("cookiefile")
     assert calls[1]["source_address"] == "0.0.0.0"
+
+
+def test_private_po_provider_is_used_for_youtube_only(monkeypatch, tmp_path):
+    import yt_dlp
+
+    monkeypatch.setenv("CLIPFORGE_YOUTUBE_POT_URL", "http://yt-pot-provider:4416")
+    monkeypatch.delenv(import_auth.COOKIE_ENV, raising=False)
+    monkeypatch.setattr(import_auth, "DEFAULT_PATH", str(tmp_path / "missing.txt"))
+    calls = []
+
+    class FakeDownloader:
+        def __init__(self, options):
+            calls.append(options)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def download(self, _urls):
+            (tmp_path / "source.mp4").write_bytes(b"video")
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeDownloader)
+    assert download_video("https://youtu.be/abc", tmp_path).is_file()
+    assert calls[0]["extractor_args"] == {
+        "youtube": {"player_client": ["mweb"]},
+        "youtubepot-bgutilhttp": {"base_url": ["http://yt-pot-provider:4416"]},
+    }
+    (tmp_path / "source.mp4").unlink()
+    assert download_video("https://vimeo.com/123", tmp_path).is_file()
+    assert calls[1]["extractor_args"] == {}
+
+    monkeypatch.delenv("CLIPFORGE_YOUTUBE_POT_URL")
+    (tmp_path / "source.mp4").unlink()
+    assert download_video("https://youtube.com/watch?v=abc", tmp_path).is_file()
+    assert calls[2]["extractor_args"] == {}
+
+
+def test_po_provider_rejects_untrusted_endpoint(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLIPFORGE_YOUTUBE_POT_URL", "http://example.com:4416")
+    with pytest.raises(ValueError, match="private Docker service"):
+        download_video("https://www.youtube.com/watch?v=test", tmp_path)
+
+
+def test_youtube_403_has_provider_specific_guidance(monkeypatch, tmp_path):
+    import yt_dlp
+
+    monkeypatch.setenv("CLIPFORGE_YOUTUBE_POT_URL", "http://yt-pot-provider:4416")
+    monkeypatch.delenv(import_auth.COOKIE_ENV, raising=False)
+    monkeypatch.setattr(import_auth, "DEFAULT_PATH", str(tmp_path / "missing.txt"))
+
+    class DeniedDownloader:
+        def __init__(self, options):
+            assert options["extractor_args"]["youtube"]["player_client"] == ["mweb"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def download(self, _urls):
+            raise yt_dlp.utils.DownloadError(
+                "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+            )
+
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", DeniedDownloader)
+    with pytest.raises(RuntimeError, match="HTTP 403") as exc:
+        download_video("https://youtu.be/abc", tmp_path)
+    assert "server IP" in str(exc.value)
+    assert "repeated job resumes" in str(exc.value)
 
 
 def test_youtube_verification_failure_has_recovery_instructions(monkeypatch, tmp_path):

@@ -323,6 +323,55 @@ playable format is available.
 
 ## YouTube format availability and player challenges
 
+### Private YouTube PO-token provider (HTTP 403 mitigation)
+
+ClipForge's Docker deployment includes a **pinned BgUtils PO-token provider**
+(`2.0.2-deno`) and its matching yt-dlp plugin (`2.0.2`). For YouTube imports
+only, the application selects yt-dlp's `mweb` client and asks the private
+provider for a proof-of-origin (PO) token. Other platforms are unchanged.
+
+The sidecar has **no published host port**: ClipForge reaches it over Docker's
+private Compose network at `http://yt-pot-provider:4416`. Do not add a
+public `ports: ["4416:4416"]` mapping or expose it through Tailscale/proxies:
+the token service is unauthenticated and older releases had security issues.
+Plain local Python installations without `CLIPFORGE_YOUTUBE_POT_URL` continue
+to use the existing downloader behavior.
+
+The guarded server deployment command starts the provider, waits for its
+`/ping` health check to pass, and only then rebuilds
+ClipForge. It requires an idle queue and the host settings agent:
+
+```bash
+cd ~/ClipForge
+git pull --ff-only
+bash scripts/phase1-activate.sh --deploy
+docker compose --profile ai ps
+docker compose --profile ai logs --tail=40 --no-color yt-pot-provider
+```
+
+To test a short download from **video content you are authorized to retrieve**,
+without reading or printing the private YouTube cookie file:
+
+```bash
+docker compose --profile ai exec -T clipforge \
+  python -m yt_dlp --ignore-config --verbose --force-ipv4 \
+  --extractor-args 'youtube:player_client=mweb' \
+  --extractor-args 'youtubepot-bgutilhttp:base_url=http://yt-pot-provider:4416' \
+  --test -f 'bv*+ba/b' \
+  -o '/tmp/clipforge-pot-test.%(ext)s' \
+  'https://www.youtube.com/watch?v=83K8wFepWTE'
+```
+
+Look for `PO Token Providers: bgutil:http-2.0.2` and a
+`Generating a gvs PO Token` line in verbose output, then confirm the download
+completes. Token provider installation and token generation do **not**
+guarantee success: YouTube can still reject the session or server IP (403).
+If this test succeeds, retry the failed video through Activity; if it still
+fails, use the video owner's original MP4 or an authorized export instead.
+
+Sources: [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide)
+and [BgUtils provider setup](https://github.com/Brainicism/bgutil-ytdlp-pot-provider).
+
 YouTube may return `Requested format is not available` either because a
 video lacks the preferred resolution **or** because yt-dlp could not obtain
 playable video streams. ClipForge now prefers sources at 1080p or below, with

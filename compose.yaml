@@ -1,6 +1,9 @@
 services:
   clipforge:
     build: .
+    depends_on:
+      yt-pot-provider:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8765:8765"
     group_add:
@@ -9,6 +12,8 @@ services:
       CLIPFORGE_DATA_DIR: /data
       CLIPFORGE_YOUTUBE_COOKIES_FILE: ${CLIPFORGE_YOUTUBE_COOKIES_FILE:-/run/clipforge-auth/youtube.txt}
       CLIPFORGE_DOWNLOAD_IP_FAMILY: ${CLIPFORGE_DOWNLOAD_IP_FAMILY:-ipv4}
+      # Private Docker DNS name; never publish the token server to the host.
+      CLIPFORGE_YOUTUBE_POT_URL: http://yt-pot-provider:4416
       CLIPFORGE_OLLAMA_URL: ${CLIPFORGE_OLLAMA_URL:-http://ollama:11434}
       CLIPFORGE_AI_MODEL: ${CLIPFORGE_AI_MODEL:-llama3.2:3b}
       CLIPFORGE_VISION_MODEL: ${CLIPFORGE_VISION_MODEL:-moondream}
@@ -35,6 +40,30 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+
+  yt-pot-provider:
+    # Pin plugin and sidecar together. The old pre-2.0 releases had an RCE advisory.
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2-deno
+    # No ports: only containers on this Compose network may reach port 4416.
+    expose:
+      - "4416"
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - --allow-net=127.0.0.1:4416
+        - "const response = await fetch('http://127.0.0.1:4416/ping'); if (!response.ok) Deno.exit(1);"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   ollama:
     image: ollama/ollama:latest

@@ -131,6 +131,9 @@ def test_activation_retries_transient_api_startup_errors():
     script = (ROOT / "scripts" / "phase1-activate.sh").read_text()
     assert "for attempt in {1..45}; do" in script
     assert "wait_api_ready" in script
+    assert script.index("docker compose --profile ai up -d --wait --no-deps yt-pot-provider") < (
+        script.index("docker compose --profile ai up -d --build --no-deps clipforge")
+    )
     assert script.index("docker compose --profile ai up -d --build --no-deps clipforge") < (
         script.index('    wait_api_ready', script.index('  --deploy)'))
     )
