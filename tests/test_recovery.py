@@ -2,6 +2,7 @@
 import json
 from urllib.error import URLError
 
+import pytest
 from fastapi.testclient import TestClient
 
 from clipforge import ai
@@ -122,6 +123,63 @@ def test_scoring_checkpoint_skips_completed_batches(tmp_path, monkeypatch):
     assert len(clips) == 5
     assert calls[2] == [4, 5, 6, 7]
     assert [0, 1, 2, 3] not in calls[1:]
+
+
+def test_scoring_recovers_missing_batch_ids_without_manual_resume(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "ai-scores.json"
+    transcript = [{"start": 0.0, "end": 120.0, "text": "Compelling story", "words": []}]
+    monkeypatch.setenv("CLIPFORGE_AI_BATCH_SIZE", "4")
+    calls = []
+
+    def answer(batch, focus="", niche="general"):
+        ids = [w["id"] for w in batch]
+        calls.append((ids, focus, niche))
+        if len(batch) == 4:
+            ids = [ids[0], ids[2]]  # Model omitted half of the requested IDs.
+        return [{"id": ident, "score": 9, "title": "Good", "reason": "Hook"}
+                for ident in ids]
+
+    monkeypatch.setattr(ai, "_ask_ollama", answer)
+    clips = ai.select_ai_highlights(
+        transcript, 120, 30, 4, checkpoint_path=checkpoint,
+        focus="travel tips", niche="travel",
+    )
+    assert len(clips) == 4
+    assert calls == [
+        ([0, 1, 2, 3], "travel tips", "travel"),
+        ([1], "travel tips", "travel"),
+        ([3], "travel tips", "travel"),
+    ]
+    persisted = json.loads(checkpoint.read_text())
+    assert set(persisted["scores"]) == {"0", "1", "2", "3"}
+
+
+def test_scoring_bounds_individual_retries_and_checkpoints_valid_ids(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "ai-scores.json"
+    transcript = [{"start": 0.0, "end": 120.0, "text": "Compelling story", "words": []}]
+    monkeypatch.setenv("CLIPFORGE_AI_BATCH_SIZE", "4")
+    calls = []
+
+    def answer(batch):
+        ids = [w["id"] for w in batch]
+        calls.append(ids)
+        if len(batch) == 4:
+            return [
+                {"id": 0, "score": 9, "title": "Good", "reason": "Hook"},
+                {"id": 1, "score": None},  # Missing score is not a valid zero.
+                {"id": 999, "score": 10},  # Hallucinated ID must be ignored.
+                {"id": 2, "score": 8, "title": "Good", "reason": "Hook"},
+            ]
+        if ids == [3]:
+            return [{"id": 3, "score": 7, "title": "Good", "reason": "Hook"}]
+        return []
+
+    monkeypatch.setattr(ai, "_ask_ollama", answer)
+    with pytest.raises(RuntimeError, match=r"incomplete usable scores.*\[1\].*Resume job"):
+        ai.select_ai_highlights(transcript, 120, 30, 4, checkpoint_path=checkpoint)
+    assert calls == [[0, 1, 2, 3], [1], [1], [3]]
+    persisted = json.loads(checkpoint.read_text())
+    assert set(persisted["scores"]) == {"0", "2", "3"}
 
 
 def test_ollama_retries_transient_network_error(monkeypatch):

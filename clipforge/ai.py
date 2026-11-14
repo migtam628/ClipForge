@@ -212,26 +212,24 @@ def select_ai_highlights(
             "scores": {str(k): v for k, v in scores.items()},
         })
 
-    batch_size = _setting("CLIPFORGE_AI_BATCH_SIZE", 4, 1, 12)
-    for index in range(0, len(windows), batch_size):
-        batch = [w for w in windows[index:index + batch_size] if w["id"] not in scores]
-        if not batch:
-            continue
-        expected = {w["id"] for w in batch}
-        LOGGER.info("AI scoring %d excerpts; %d already checkpointed",
-                    len(batch), len(scores))
-        responses = (
+    def ask(batch: list[dict]) -> list[dict]:
+        return (
             _ask_ollama(batch, focus=focus, niche=niche)
             if focus or niche != "general" else _ask_ollama(batch)
         )
+
+    def accept_scores(responses: list[dict], expected: set[int]) -> None:
         for response in responses:
             if not isinstance(response, dict):
                 continue
             ident = response.get("id")
             if type(ident) is not int or ident not in expected:
                 continue
+            raw_score = response.get("score")
+            if raw_score is None or isinstance(raw_score, bool):
+                continue
             try:
-                value = float(response.get("score", 0))
+                value = float(raw_score)
             except (TypeError, ValueError):
                 continue
             if math.isfinite(value):
@@ -240,11 +238,36 @@ def select_ai_highlights(
                     "title": str(response.get("title", ""))[:100],
                     "reason": str(response.get("reason", ""))[:180],
                 }
+
+    batch_size = _setting("CLIPFORGE_AI_BATCH_SIZE", 4, 1, 12)
+    for index in range(0, len(windows), batch_size):
+        batch = [w for w in windows[index:index + batch_size] if w["id"] not in scores]
+        if not batch:
+            continue
+        LOGGER.info("AI scoring %d excerpts; %d already checkpointed",
+                    len(batch), len(scores))
+        accept_scores(ask(batch), {w["id"] for w in batch})
         checkpoint()
-        if any(w["id"] not in scores for w in batch):
+        missing = [w for w in batch if w["id"] not in scores]
+        if missing:
+            LOGGER.warning(
+                "Ollama omitted %d of %d usable scores; retrying each missing excerpt",
+                len(missing), len(batch),
+            )
+        for window in missing:
+            for attempt in range(1, 3):
+                LOGGER.info("AI retrying excerpt %d individually (%d/2)",
+                            window["id"], attempt)
+                accept_scores(ask([window]), {window["id"]})
+                checkpoint()
+                if window["id"] in scores:
+                    break
+        still_missing = [w["id"] for w in missing if w["id"] not in scores]
+        if still_missing:
             raise RuntimeError(
-                "Ollama returned incomplete usable scores. Saved valid scores; "
-                "use Resume job to retry the missing excerpts."
+                f"Ollama returned incomplete usable scores for excerpt IDs {still_missing} "
+                "after individual retries. Saved valid scores; use Resume job "
+                "to retry only these excerpts."
             )
     if not scores:
         raise RuntimeError("AI did not return usable scores; no clips generated")
