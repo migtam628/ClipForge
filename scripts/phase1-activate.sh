@@ -164,6 +164,9 @@ PY
       echo "Host configuration agent not running. Run --prepare first." >&2; exit 1;
     }
     docker compose --profile ai config -q
+    # The downloader uses an internal HTTP PO-token provider. Start it before
+    # recreating ClipForge because --no-deps intentionally skips dependencies.
+    docker compose --profile ai up -d --wait --no-deps yt-pot-provider
     docker compose --profile ai up -d --build --no-deps clipforge
     echo "Waiting for ClipForge API readiness..."
     wait_api_ready

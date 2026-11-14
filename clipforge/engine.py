@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from clipforge.import_auth import youtube_cookie_session
+from clipforge.import_auth import _is_youtube, youtube_cookie_session
 
 HOSTS = (
     "youtube.com",
@@ -321,6 +321,24 @@ def download_video(url: str, output_dir: Path) -> Path:
         "restrictfilenames": True,
         "extractor_args": {},
     }
+    # Use the yt-dlp PO-token plugin only for YouTube, and only when the
+    # deployment explicitly configures the private provider. Locally installed
+    # ClipForge without the sidecar keeps its existing extraction behavior.
+    pot_url = os.environ.get("CLIPFORGE_YOUTUBE_POT_URL", "").strip()
+    is_youtube = _is_youtube(url)
+    if pot_url and is_youtube:
+        parsed = urlsplit(pot_url)
+        if (parsed.scheme != "http" or parsed.hostname != "yt-pot-provider"
+                or parsed.port != 4416 or parsed.username or parsed.password
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+            raise ValueError(
+                "CLIPFORGE_YOUTUBE_POT_URL must point to the private Docker "
+                "service at http://yt-pot-provider:4416"
+            )
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["mweb"]},
+            "youtubepot-bgutilhttp": {"base_url": [pot_url.rstrip("/")]},
+        }
     if families[ip_family] is not None:
         opts["source_address"] = families[ip_family]
     # A mounted private cookie file is optional; never copy it into job storage.
@@ -333,6 +351,18 @@ def download_video(url: str, output_dir: Path) -> Path:
                 downloader.download([url])
         except yt_dlp.utils.DownloadError as exc:
             message = str(exc).lower()
+            if is_youtube and "http error 403" in message:
+                raise RuntimeError(
+                    "YouTube refused the media download (HTTP 403). "
+                    + ("The private PO-token provider was configured, but YouTube "
+                       "may still reject the account/session or server IP. "
+                       if pot_url else
+                       "Configure the private PO-token provider to try a supported "
+                       "YouTube client. ")
+                    + "Check the token provider logs and YouTube account access. "
+                    "For your own video, import the original MP4 instead; "
+                    "repeated job resumes alone will not resolve a persistent 403."
+                ) from exc
             if "requested format is not available" in message or "only images are available" in message:
                 raise RuntimeError(
                     "YouTube did not provide a playable video format. ClipForge "
