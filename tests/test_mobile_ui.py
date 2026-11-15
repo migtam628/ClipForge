@@ -7,7 +7,6 @@ running job. Visual acceptance is covered by the manual mobile QA checklist.
 from html.parser import HTMLParser
 from pathlib import Path
 
-
 STATIC = Path(__file__).resolve().parents[1] / "clipforge" / "static"
 HTML = (STATIC / "index.html").read_text()
 CSS = (STATIC / "style.css").read_text()
