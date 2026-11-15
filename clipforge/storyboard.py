@@ -79,7 +79,8 @@ def vision_status() -> dict:
     return status
 
 
-def _ollama(body: dict, *, vision: bool = False) -> str:
+def _ollama(body: dict, *, vision: bool = False,
+            max_attempts: int | None = None) -> str:
     base = os.environ.get("CLIPFORGE_OLLAMA_URL", "").rstrip("/")
     parsed = urlsplit(base)
     if parsed.scheme != "http" or parsed.hostname not in {
@@ -91,7 +92,8 @@ def _ollama(body: dict, *, vision: bool = False) -> str:
         json.dumps(body).encode(),
         {"Content-Type": "application/json"},
     )
-    retries = _setting("CLIPFORGE_AI_RETRIES", 3, 1, 5)
+    retries = (max_attempts if max_attempts is not None else
+               _setting("CLIPFORGE_AI_RETRIES", 3, 1, 5))
     last_error = None
     for attempt in range(retries):
         try:
@@ -258,7 +260,7 @@ def _timed_script_batch(model: str, windows: list[dict], style: str,
         "model": model, "format": schema, "prompt": prompt, "stream": False,
         "options": {"temperature": 0, "num_predict": 480},
         "keep_alive": "5m",
-    })
+    }, max_attempts=1 if len(ids) > 1 else 2)
     try:
         entries = json.loads(answer)["beats"]
         if not isinstance(entries, list) or len(entries) != len(ids):
@@ -382,25 +384,48 @@ def build_storyboard(
             "texts": {str(key): text for key, text in texts.items()},
         })
 
+    def recoverable_timeout(exc: RuntimeError) -> bool:
+        return (str(exc).startswith("Local Ollama narration analysis unavailable:")
+                and (isinstance(exc.__cause__, TimeoutError)
+                     or "timed out" in str(exc).lower()))
+
     for offset in range(0, len(evidence), 2):
         group = [item for item in evidence[offset:offset + 2] if item["id"] not in texts]
         if not group:
             continue
         try:
             generated = _timed_script_batch(model, group, style, language)
-        except ValueError:
-            # Recover from a truncated/malformed pair by requesting just one
-            # short beat at a time. Never use invented or unvalidated fallback.
+        except (ValueError, RuntimeError) as exc:
+            if isinstance(exc, RuntimeError) and not recoverable_timeout(exc):
+                raise
+            # A CPU-bound pair may time out, just as it may return truncated
+            # JSON. Retry individual windows and persist each successful beat.
+            LOGGER.warning(
+                "Timed narration windows %s need individual retry (%s)",
+                [item["id"] + 1 for item in group],
+                "timeout" if isinstance(exc, RuntimeError) else "invalid response",
+            )
             try:
                 for item in group:
-                    record_draft(_timed_script_batch(
-                        model, [item], style, language, simpler=True,
-                    ))
-            except ValueError as exc:
+                    try:
+                        record_draft(_timed_script_batch(
+                            model, [item], style, language, simpler=True,
+                        ))
+                    except RuntimeError as retry_exc:
+                        if not recoverable_timeout(retry_exc):
+                            raise
+                        raise RuntimeError(
+                            f"Local Ollama timed out generating narration for window "
+                            f"{item['id'] + 1}/{len(evidence)}. Completed frame "
+                            "observations and narration drafts are saved; Resume job "
+                            "to retry only the missing window. Check Ollama resources "
+                            "if this persists."
+                        ) from retry_exc
+            except ValueError as retry_exc:
                 raise RuntimeError(
                     "Ollama could not return valid timed narration. "
                     "The completed frame observations are saved; review model logs."
-                ) from exc
+                ) from retry_exc
         else:
             record_draft(generated)
         LOGGER.info("Timed narration script ready: windows %s-%s/%s",
