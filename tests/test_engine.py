@@ -197,6 +197,59 @@ def test_split_screen_renders_two_source_regions(tmp_path):
     assert bottom[2] > bottom[0] + 100
 
 
+def test_split_crop_contain_keeps_widescreen_shape_without_stretching(tmp_path):
+    source = tmp_path / "red.mp4"
+    output = tmp_path / "stack.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=red:size=320x180:rate=8:duration=1",
+        "-c:v", "libx264", str(source),
+    ], capture_output=True, check=True)
+    # First box is a full 16:9 source; second is a narrow square. Each should
+    # be independently composed into a vertical half without stretching.
+    render_clip(source, output, 0, 0.75, "9:16", framing="split",
+                split_fill="contain", split_boxes=[
+                    {"x": 0, "y": 0, "width": 1, "height": 1},
+                    {"x": 0.25, "y": 0, "width": 0.5, "height": 0.9},
+                ])
+    dimensions = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output),
+    ], capture_output=True, text=True, check=True)
+    assert dimensions.stdout.strip() == "720,1280"
+    # With contained 16:9 content, the top-left of the first pane is a bar;
+    # the middle contains the original red image.
+    def color_at(y):
+        return subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(output),
+            "-vf", f"crop=2:2:360:{y},format=rgb24", "-frames:v", "1",
+            "-f", "rawvideo", "pipe:1",
+        ], capture_output=True, check=True).stdout[:3]
+
+    edge, middle = color_at(20), color_at(320)
+    assert middle[0] > middle[1] + 100
+    assert edge[0] < 75 and edge[1] < 80 and edge[2] < 100
+
+
+@pytest.mark.parametrize("ratio", ["4:5", "3:2", "21:9"])
+def test_additional_ratios_render_expected_canvas(tmp_path, ratio):
+    from clipforge.formats import OUTPUT_SIZES
+
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "output.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=blue:size=160x90:rate=8:duration=1",
+        "-c:v", "libx264", str(source),
+    ], capture_output=True, check=True)
+    render_clip(source, output, 0, 0.5, ratio, has_source_audio=False)
+    dimensions = subprocess.run([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output),
+    ], capture_output=True, text=True, check=True)
+    assert tuple(map(int, dimensions.stdout.strip().split(","))) == OUTPUT_SIZES[ratio]
+
+
 def test_split_ratio_changes_rendered_panel_height(tmp_path):
     source = tmp_path / "reaction.mp4"
     output = tmp_path / "vertical.mp4"
