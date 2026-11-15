@@ -591,6 +591,18 @@ h1 { font-size: clamp(42px,4.7vw,60px); line-height: 1.08; letter-spacing: -2.9p
   letter-spacing: .5px;
 }
 .library-job .job-status.failed { background: #35252a; color: #ffb8b1; border-color: #755057; }
+.job-state {
+  display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
+}
+.job-progress-value {
+  color: #d4f268; font: 700 18px 'Space Grotesk',sans-serif;
+  letter-spacing: -.5px; font-variant-numeric: tabular-nums;
+  min-width: 48px; text-align: right;
+}
+@media (max-width: 520px) {
+  .job-head { flex-wrap: wrap; }
+  .job-state { width: 100%; justify-content: space-between; }
+}
 .library-job>.job-actions {
   margin: 0; padding: 0 24px 20px;
   gap: 12px; color: #9eacba; font-size: 12px;

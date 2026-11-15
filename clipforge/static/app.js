@@ -1296,6 +1296,9 @@ function card(job, mode = currentPage) {
   const wrapper = el('article', mode === 'library' ? 'job library-job' : 'job');
   const head = el('div', 'job-head');
   const meta = el('div');
+  const progress = Number.isFinite(Number(job.progress))
+    ? Math.min(100, Math.max(0, Math.round(Number(job.progress)))) : 0;
+  const inProgress = !['completed', 'failed'].includes(job.status);
   meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
   if (mode === 'library' && job.clips[0]?.thumbnail) {
     const cover = el('img', 'library-project-thumb');
@@ -1304,15 +1307,23 @@ function card(job, mode = currentPage) {
     cover.loading = 'lazy';
     head.append(cover);
   }
-  head.append(meta, el('span', `job-status ${job.status === 'failed' ? 'failed' : ''}`, job.status));
+  const state = el('div', 'job-state');
+  state.append(el('span', `job-status ${job.status === 'failed' ? 'failed' : ''}`, job.status));
+  if (inProgress) state.append(el('strong', 'job-progress-value', `${progress}%`));
+  head.append(meta, state);
   wrapper.append(head);
   if (job.batch_id)
     wrapper.append(el('span', 'clip-tag', 'Batch source ' + job.batch_index + '/' + job.batch_total));
   if (job.status === 'failed') wrapper.append(el('p', 'error', job.error || 'This job failed.'));
-  if (job.status !== 'completed' && job.status !== 'failed') {
+  if (inProgress) {
     const bar = el('div', 'progress-bg');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', `${job.status} progress`);
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.setAttribute('aria-valuenow', String(progress));
     const fill = el('div', 'progress-fill');
-    fill.style.width = `${job.progress}%`;
+    fill.style.width = `${progress}%`;
     bar.append(fill);
     wrapper.append(bar);
   }
