@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from clipforge.formats import OUTPUT_SIZES
+
 STYLES = {
     "classic": ("&H00FFFFFF", 54, 2),
     "bold": ("&H0000FFFF", 64, 4),
@@ -196,7 +198,7 @@ def write_context_overlays(
     Text comes from reviewed source-window beats, not from imagined events.
     Brief overlays leave the original soundtrack and lower subtitle area alone.
     """
-    dimensions = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}
+    dimensions = OUTPUT_SIZES
     if aspect_ratio not in dimensions:
         raise ValueError("Unsupported contextual text aspect ratio")
     width, height = dimensions[aspect_ratio]

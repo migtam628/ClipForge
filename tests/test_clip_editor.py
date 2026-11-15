@@ -94,6 +94,42 @@ def test_editing_job_keeps_prior_clip_and_regenerates_zip(tmp_path, monkeypatch)
         assert archive.namelist() == ["clip-001-v01.mp4"]
 
 
+def test_editor_can_export_an_existing_clip_in_a_new_ratio(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    observed = []
+
+    def fake_render(source, dest, start, duration, ratio, **kwargs):
+        observed.append((ratio, kwargs))
+        dest.write_bytes(b"revised-clip" * 100)
+
+    monkeypatch.setattr(module, "probe", lambda *_: {"duration": 60, "has_audio": False})
+    monkeypatch.setattr(module, "render_clip", fake_render)
+    monkeypatch.setattr(module, "render_thumbnail", lambda src, dest: dest.write_bytes(b"jpg"))
+    response = client.post(f"/api/jobs/{job_id}/clips/1/edit", json={
+        "start": 5, "duration": 20, "framing": "pad", "effect": "none",
+        "caption_style": "none", "hook_style": "none",
+        "aspect_ratio": "16:9", "split_fill": "contain",
+    })
+    assert response.status_code == 202, response.text
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        clip = module._read(folder)["clips"][0]
+        if clip.get("revision_state") in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    assert clip["revision_state"] == "completed", clip.get("revision_error")
+    assert observed[0][0] == "16:9"
+    assert observed[0][1]["split_fill"] == "contain"
+    assert clip["aspect_ratio"] == "16:9"
+    assert clip["revision_history"][0]["filename"] == "clip-001.mp4"
+
+
+def test_editor_rejects_nonvertical_split():
+    with pytest.raises(ValueError, match="9:16"):
+        module.ClipEditRequest(start=0, duration=5, framing="split", aspect_ratio="16:9")
+
+
 def test_timeline_source_preview_is_scoped_to_completed_job(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     job_id, folder = _completed_job(tmp_path)

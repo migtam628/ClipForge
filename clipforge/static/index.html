@@ -85,23 +85,26 @@
                   <iframe id="framing-embed" title="YouTube source preview" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen hidden></iframe>
                   <div class="framing-empty" id="framing-empty">File previews appear here. For video links, framing is applied to the downloaded source during rendering.</div>
                   <div class="split-selection" id="split-selection" hidden>
-                    <button type="button" class="crop-box crop-box-a" data-crop="0" aria-label="Move top split screen box" tabindex="0"><span>TOP · 1</span></button>
-                    <button type="button" class="crop-box crop-box-b" data-crop="1" aria-label="Move bottom split screen box" tabindex="0"><span>BOTTOM · 2</span></button>
+                    <button type="button" class="crop-box crop-box-a" data-crop="0" aria-label="Move or resize top split-screen crop" tabindex="0"><span>TOP · 1</span><span class="crop-resize-handle" aria-hidden="true"></span></button>
+                    <button type="button" class="crop-box crop-box-b" data-crop="1" aria-label="Move or resize bottom split-screen crop" tabindex="0"><span>BOTTOM · 2</span><span class="crop-resize-handle" aria-hidden="true"></span></button>
                   </div>
                 </div>
                 <p class="helper-note" id="framing-instructions">For local uploads, you can preview the framing before processing.</p>
                 <div class="split-controls" id="split-controls" hidden>
+                  <label for="split-shape-0">Top box · shape <select id="split-shape-0" class="split-shape"><option value="auto">Auto · fit panel</option><option value="16:9">16:9 · Widescreen</option><option value="21:9">21:9 · Cinematic</option><option value="4:3">4:3 · Classic</option><option value="1:1">1:1 · Square</option><option value="4:5">4:5 · Portrait</option><option value="3:4">3:4 · Portrait</option><option value="2:3">2:3 · Portrait</option><option value="9:16">9:16 · Vertical</option><option value="free">Freeform · unlock</option></select></label>
+                  <label for="split-shape-1">Bottom box · shape <select id="split-shape-1" class="split-shape"><option value="auto">Auto · fit panel</option><option value="16:9">16:9 · Widescreen</option><option value="21:9">21:9 · Cinematic</option><option value="4:3">4:3 · Classic</option><option value="1:1">1:1 · Square</option><option value="4:5">4:5 · Portrait</option><option value="3:4">3:4 · Portrait</option><option value="2:3">2:3 · Portrait</option><option value="9:16">9:16 · Vertical</option><option value="free">Freeform · unlock</option></select></label>
                   <label for="split-zoom-0">Top person · zoom <input type="range" id="split-zoom-0" min="25" max="100" value="36" step="1"></label>
                   <label for="split-zoom-1">Bottom person · zoom <input type="range" id="split-zoom-1" min="25" max="100" value="36" step="1"></label>
                   <label for="split-ratio">Panel sizes · <span id="split-ratio-value">50% top / 50% bottom</span><input type="range" id="split-ratio" min="30" max="70" value="50" step="5"></label>
+                  <label for="split-fill">Fit inside panels <select id="split-fill" class="split-shape"><option value="cover">Fill · crop edges</option><option value="contain">Show all · add bars</option></select></label>
                   <button type="button" class="small-action" id="split-reset">Reset positions</button>
                 </div>
               </div>
               <div class="framing-card portrait-card">
                 <div class="framing-card-head"><strong>Vertical result</strong><span>9:16 preview</span></div>
                 <div class="portrait-preview" id="portrait-preview">
-                  <div class="portrait-pane"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-a" alt="Still thumbnail crop guide for the first pane" hidden><span class="portrait-placeholder">Your clip</span></div>
-                  <div class="portrait-pane"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-b" alt="Still thumbnail crop guide for the second pane" hidden><span class="portrait-placeholder">Framing preview</span></div>
+                  <div class="portrait-pane"><div class="portrait-crop-surface" id="portrait-surface-a"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-a" alt="Still thumbnail crop guide for the first pane" hidden></div><span class="portrait-placeholder">Your clip</span></div>
+                  <div class="portrait-pane"><div class="portrait-crop-surface" id="portrait-surface-b"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-b" alt="Still thumbnail crop guide for the second pane" hidden></div><span class="portrait-placeholder">Framing preview</span></div>
                 </div>
                 <p class="helper-note" id="portrait-preview-note">Local file previews use your source. Final exports use full-resolution FFmpeg rendering.</p>
               </div>
@@ -126,7 +129,7 @@
           <div class="settings-grid">
             <div class="field"><label for="clip-seconds">Clip length</label><select id="clip-seconds"><option value="15">15 seconds</option><option value="30" selected>30 seconds</option><option value="45">45 seconds</option><option value="60">60 seconds</option><option value="90">90 seconds</option><option value="120">120 seconds</option></select></div>
             <div class="field"><label for="max-clips">Maximum clips</label><select id="max-clips"><option value="1">1 clip</option><option value="2">2 clips</option><option value="3">3 clips</option><option value="5" selected>5 clips</option><option value="10">10 clips</option><option value="25">25 clips</option><option value="50">50 clips</option><option value="100">100 clips</option><option value="custom">Custom amount…</option></select><input type="number" id="custom-max-clips" class="custom-count" min="1" max="100" value="5" aria-label="Custom number of clips" hidden></div>
-            <div class="field"><label for="aspect-ratio">Video format</label><select id="aspect-ratio"><option value="9:16">9:16 · Vertical shorts</option><option value="16:9">16:9 · Widescreen</option><option value="1:1">1:1 · Square</option></select></div>
+            <div class="field"><label for="aspect-ratio">Video format</label><select id="aspect-ratio"><option value="9:16">9:16 · Vertical shorts</option><option value="4:5">4:5 · Portrait</option><option value="3:4">3:4 · Portrait</option><option value="2:3">2:3 · Portrait</option><option value="1:1">1:1 · Square</option><option value="4:3">4:3 · Classic</option><option value="3:2">3:2 · Landscape</option><option value="16:9">16:9 · Widescreen</option><option value="21:9">21:9 · Cinematic</option></select></div>
           </div>
           <div class="settings-heading ai-heading"><span class="step">03</span><div><h2>AI editor</h2><p>Find standout moments and give your clips a distinct look</p></div></div>
           <div class="creator-profile-bar">
@@ -325,7 +328,7 @@
             <form id="settings-form" class="settings-form">
               <div class="field"><label for="settings-clip-seconds">Length (seconds)</label><select id="settings-clip-seconds"><option>15</option><option>30</option><option>45</option><option>60</option><option>90</option><option>120</option></select></div>
               <div class="field"><label for="settings-max-clips">Maximum clips (1–100)</label><input type="number" min="1" max="100" id="settings-max-clips" required></div>
-              <div class="field"><label for="settings-aspect-ratio">Aspect ratio</label><select id="settings-aspect-ratio"><option>9:16</option><option>16:9</option><option>1:1</option></select></div>
+              <div class="field"><label for="settings-aspect-ratio">Aspect ratio</label><select id="settings-aspect-ratio"><option>9:16</option><option>4:5</option><option>3:4</option><option>2:3</option><option>1:1</option><option>4:3</option><option>3:2</option><option>16:9</option><option>21:9</option></select></div>
               <div class="field"><label for="settings-selection-mode">Selection mode</label><select id="settings-selection-mode"><option value="ai">AI semantic</option><option value="energy">Audio-energy</option></select></div>
               <div class="field"><label for="settings-content-niche">Channel niche</label><select id="settings-content-niche"><option value="general">General</option><option value="podcast">Podcast</option><option value="gaming">Gaming</option><option value="education">Education</option><option value="comedy">Comedy</option><option value="travel">Travel</option><option value="sports">Sports</option><option value="business">Business</option><option value="music">Music</option><option value="news">News</option></select></div>
               <div class="field"><label for="settings-clip-focus">Preferred moments</label><textarea id="settings-clip-focus" maxlength="400" rows="2" placeholder="What should the AI find?"></textarea></div>

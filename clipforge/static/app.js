@@ -130,12 +130,22 @@ function splitSourceRatio() {
     ? source.videoWidth / source.videoHeight : 16 / 9;
 }
 
-function fitSplitBox(box, pane) {
+function splitBoxFactor(pane, box) {
+  const shape = $(`split-shape-${pane}`).value;
+  if (shape === 'free') return box.height / box.width;
+  if (shape !== 'auto') {
+    const [width, height] = shape.split(':').map(Number);
+    return splitSourceRatio() * height / width;
+  }
   const paneHeight = pane === 0 ? splitTopRatio() : 1 - splitTopRatio();
-  const factor = splitSourceRatio() * 1280 * paneHeight / 720;
+  return splitSourceRatio() * 1280 * paneHeight / 720;
+}
+
+function fitSplitBox(box, pane) {
+  const factor = splitBoxFactor(pane, box);
   const centerX = box.x + box.width / 2;
   const centerY = box.y + box.height / 2;
-  const width = Math.min(box.width, .98, .98 / factor);
+  const width = Math.min(Math.max(.08, box.width), .98, .98 / factor);
   const height = width * factor;
   return {
     x: clamp(centerX - width / 2, 0, 1 - width),
@@ -187,6 +197,19 @@ function renderFraming() {
       left: `${box.x * 100}%`, top: `${box.y * 100}%`,
       width: `${box.width * 100}%`, height: `${box.height * 100}%`
     });
+    const surface = $(i === 0 ? 'portrait-surface-a' : 'portrait-surface-b');
+    if (split && (previewObjectUrl || previewYoutube)) {
+      const cropAspect = splitSourceRatio() * box.width / box.height;
+      const paneAspect = 720 / (1280 * (i === 0 ? topRatio : 1 - topRatio));
+      const factor = cropAspect / paneAspect;
+      const cover = $('split-fill').value === 'cover';
+      const wider = factor > 1;
+      surface.style.width = `${(cover ? wider : !wider) ? 100 * factor : 100}%`;
+      surface.style.height = `${(cover ? !wider : wider) ? 100 / factor : 100}%`;
+    } else {
+      surface.style.width = '100%';
+      surface.style.height = '100%';
+    }
     for (const media of [$(i === 0 ? 'portrait-video-a' : 'portrait-video-b'),
       $(i === 0 ? 'portrait-image-a' : 'portrait-image-b')]) {
       if (split && (previewObjectUrl || previewYoutube)) {
@@ -204,7 +227,7 @@ function renderFraming() {
     }
   });
   $('framing-instructions').textContent = (split
-    ? 'Drag the colored boxes over each person. Use zoom sliders to resize; arrow keys fine-tune a selected box.'
+    ? 'Drag each colored box to position it, or drag its bottom-right handle to resize. Choose a ratio for each box; arrow keys fine-tune its position.'
     : 'Switch layouts to compare how the same source will be framed.') +
     (activeTab === 'url' && previewYoutube
       ? ' YouTube guides are approximate; review the downloaded source in the Library editor.' : '');
@@ -265,7 +288,7 @@ function loadSourcePreview() {
   }
   for (const suffix of ['a', 'b']) {
     const img = $(`portrait-image-${suffix}`);
-    const placeholder = img.nextElementSibling;
+    const placeholder = img.closest('.portrait-pane').querySelector('.portrait-placeholder');
     img.hidden = true;
     img.removeAttribute('src');
     placeholder.hidden = Boolean(previewObjectUrl);
@@ -372,22 +395,47 @@ $('split-ratio').addEventListener('input', () => {
   markSplitCustom();
   renderFraming();
 });
+$('split-fill').addEventListener('change', renderFraming);
+for (const i of [0, 1]) {
+  $(`split-shape-${i}`).addEventListener('change', () => {
+    splitBoxes[i] = fitSplitBox(splitBoxes[i], i);
+    $(`split-zoom-${i}`).value = Math.round(splitBoxes[i].width * 100);
+    markSplitCustom();
+    renderFraming();
+  });
+}
 
 for (const i of [0, 1]) {
   const button = document.querySelector(`[data-crop="${i}"]`);
   let point = null;
   button.addEventListener('pointerdown', (event) => {
     if ($('framing').value !== 'split') return;
-    point = {x: event.clientX, y: event.clientY};
+    point = {x: event.clientX, y: event.clientY,
+      resizing: Boolean(event.target.closest('.crop-resize-handle'))};
     button.setPointerCapture(event.pointerId);
   });
   button.addEventListener('pointermove', (event) => {
     if (!point) return;
     const stage = $('framing-stage').getBoundingClientRect();
     const box = splitBoxes[i];
-    box.x = clamp(box.x + (event.clientX - point.x) / stage.width, 0, 1 - box.width);
-    box.y = clamp(box.y + (event.clientY - point.y) / stage.height, 0, 1 - box.height);
-    point = {x: event.clientX, y: event.clientY};
+    const dx = (event.clientX - point.x) / stage.width;
+    const dy = (event.clientY - point.y) / stage.height;
+    if (point.resizing) {
+      if ($(`split-shape-${i}`).value === 'free') {
+        box.width = clamp(box.width + dx, .08, 1 - box.x);
+        box.height = clamp(box.height + dy, .08, 1 - box.y);
+      } else {
+        const factor = splitBoxFactor(i, box);
+        const widthDelta = Math.abs(dx) >= Math.abs(dy / factor) ? dx : dy / factor;
+        box.width = clamp(box.width + widthDelta, .08, Math.min(1 - box.x, (1 - box.y) / factor));
+        box.height = box.width * factor;
+      }
+      $(`split-zoom-${i}`).value = Math.round(box.width * 100);
+    } else {
+      box.x = clamp(box.x + dx, 0, 1 - box.width);
+      box.y = clamp(box.y + dy, 0, 1 - box.height);
+    }
+    point = {...point, x: event.clientX, y: event.clientY};
     markSplitCustom();
     renderFraming();
   });
@@ -410,8 +458,9 @@ for (const i of [0, 1]) {
     const w = Number(event.target.value) / 100;
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
-    const updated = fitSplitBox({x: cx - w / 2, y: cy - box.height / 2,
-      width: w, height: box.height}, i);
+    const scaledHeight = box.height * w / box.width;
+    const updated = fitSplitBox({x: cx - w / 2, y: cy - scaledHeight / 2,
+      width: w, height: scaledHeight}, i);
     Object.assign(box, updated);
     markSplitCustom();
     renderFraming();
@@ -519,6 +568,7 @@ async function createJob() {
     framing: $('framing').value,
     split_boxes: splitBoxes.map((box) => ({...box})),
     split_ratio: splitTopRatio(),
+    split_fill: $('split-fill').value,
     hook_style: $('hook-style').value,
     narration: $('narration').value,
     narration_style: $('narration-style').value,
@@ -914,11 +964,22 @@ function buildClipEditor(job, clip) {
     ['cinema', 'Cinematic'], ['noir', 'Black & white']
   ], clip.effect || job.options.effect);
 
+  const outputRatio = dropdown('Export aspect ratio', [
+    ['9:16', '9:16 · Vertical shorts'], ['4:5', '4:5 · Portrait'],
+    ['3:4', '3:4 · Portrait'], ['2:3', '2:3 · Portrait'],
+    ['1:1', '1:1 · Square'], ['4:3', '4:3 · Classic'],
+    ['3:2', '3:2 · Landscape'], ['16:9', '16:9 · Widescreen'],
+    ['21:9', '21:9 · Cinematic']
+  ], clip.aspect_ratio || job.options.aspect_ratio);
+
   const framing = dropdown('Framing', [
     ['smart', 'Smart · follow faces'], ['blur', 'Blurred background'],
     ['crop', 'Centered crop'], ['pad', 'Keep full frame'],
-    ...(job.options.aspect_ratio === '9:16' ? [['split', 'Two-person reaction split']] : [])
+    ['split', 'Two-person reaction split · 9:16 only']
   ], clip.framing || job.options.framing);
+  const splitFill = dropdown('Split panel fit', [
+    ['cover', 'Fill panel · trim edges'], ['contain', 'Show full crop · add bars']
+  ], clip.split_fill || job.options.split_fill || 'cover');
 
   const captions = dropdown('Captions', [
     ['karaoke', 'Word-aligned karaoke'], ['pop', 'Animated pop words'],
@@ -1161,6 +1222,8 @@ function buildClipEditor(job, clip) {
       return notify('Revised timing needs regenerated contextual text.');
     if (musicEnabled.checked && !musicReady)
       return notify('Upload a music track before enabling background music.');
+    if (framing.value === 'split' && outputRatio.value !== '9:16')
+      return notify('Choose 9:16 to render the two-person split, or change the framing mode.');
     if (voice.checked && (!approval.checked ||
         (!script.value.trim() && !regenerateCheck.checked && !beatEditors.some(b => b.text.value.trim()))))
       return notify('Approve ElevenLabs usage and enter a script or enable video analysis.');
@@ -1174,10 +1237,11 @@ function buildClipEditor(job, clip) {
     const settings = {
       start: cutsActive ? 0 : begin, duration: cutsActive ? Number(cutDuration.toFixed(2)) : span,
       segments: orderedCuts, title: title.value.trim(),
-      effect: effect.value, framing: framing.value,
+      effect: effect.value, framing: framing.value, aspect_ratio: outputRatio.value,
       split_boxes: clip.split_boxes?.length === 2 ? clip.split_boxes :
         job.options.split_boxes,
       split_ratio: clip.split_ratio ?? job.options.split_ratio ?? 0.5,
+      split_fill: splitFill.value,
       caption_style: captions.value, hook_style: hook.value,
       script: cutsActive ? '' : script.value.trim(), voiceover: voice.checked,
       manual_beats: useBeatOverrides ? beatEditors.map(b => ({
@@ -1278,7 +1342,7 @@ function card(job, mode = currentPage) {
         media.append(el('span', 'clip-duration', `${Math.round(clip.duration)}s`));
         description.append(el('span', 'clip-eyebrow', `CLIP ${clipNumber}`));
         description.append(el('h4', 'clip-title', clip.title || `Clip ${clipNumber}`));
-        description.append(el('span', 'clip-meta', `Starts at ${startTime} · ${clip.duration}s`));
+        description.append(el('span', 'clip-meta', `Starts at ${startTime} · ${clip.duration}s · ${clip.aspect_ratio || job.options.aspect_ratio}`));
       } else {
         description.append(el('strong', '', `Clip ${clipNumber}`),
           el('span', '', `${startTime} · ${clip.duration}s`));

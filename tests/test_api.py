@@ -45,6 +45,10 @@ def test_split_framing_validates_boxes_and_requires_vertical_output():
     assert len(default.split_boxes) == 2
     assert default.aspect_ratio == "9:16"
     assert default.split_ratio == 0.5
+    assert default.split_fill == "cover"
+    assert module.Options(framing="split", split_fill="contain").split_fill == "contain"
+    with pytest.raises(ValueError):
+        module.Options(framing="split", split_fill="stretch")
     assert module.Options(framing="split", split_ratio=0.65).split_ratio == 0.65
     for value in (-0.1, 0.29, 0.71, float("nan"), float("inf")):
         with pytest.raises(ValueError):
@@ -62,6 +66,25 @@ def test_split_framing_validates_boxes_and_requires_vertical_output():
         ],
     })
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize("ratio", ["9:16", "2:3", "3:4", "4:5", "1:1",
+                                   "4:3", "3:2", "16:9", "21:9"])
+def test_output_aspect_ratios_are_accepted(ratio):
+    from clipforge.formats import OUTPUT_SIZES
+
+    assert module.Options(aspect_ratio=ratio).aspect_ratio == ratio
+    assert all(dimension % 2 == 0 for dimension in OUTPUT_SIZES[ratio])
+
+
+def test_studio_has_independent_crop_shape_and_output_controls():
+    html = client.get("/").text
+    for control in ("split-shape-0", "split-shape-1", "split-fill",
+                    "aspect-ratio", "settings-aspect-ratio"):
+        assert f'id="{control}"' in html
+    assert 'value="16:9"' in html
+    assert 'value="free"' in html
+    assert html.count('class="crop-resize-handle"') == 2
 
 
 def test_unknown_job():
@@ -126,6 +149,7 @@ def test_split_upload_persists_manual_boxes_and_completes(tmp_path, monkeypatch)
         response = client.post("/api/uploads", data={
             "clip_seconds": "15", "max_clips": "1", "framing": "split",
             "split_boxes": json.dumps(boxes), "split_ratio": "0.65",
+            "split_fill": "contain",
             "rights_confirmed": "true",
         }, files={"file": ("sample.mp4", stream, "video/mp4")})
     assert response.status_code == 202, response.text
@@ -139,9 +163,11 @@ def test_split_upload_persists_manual_boxes_and_completes(tmp_path, monkeypatch)
     assert job["status"] == "completed", job.get("error")
     assert job["options"]["split_boxes"] == boxes
     assert job["options"]["split_ratio"] == 0.65
+    assert job["options"]["split_fill"] == "contain"
     assert job["clips"][0]["framing"] == "split"
     assert job["clips"][0]["split_boxes"] == boxes
     assert job["clips"][0]["split_ratio"] == 0.65
+    assert job["clips"][0]["split_fill"] == "contain"
     video = client.get(f"/api/jobs/{job_id}/clips/{job['clips'][0]['filename']}")
     assert video.status_code == 200 and len(video.content) > 500
 

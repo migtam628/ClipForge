@@ -48,6 +48,7 @@ from clipforge.engine import (
     validate_url,
 )
 from clipforge.environment import field_schema, validate_patch
+from clipforge.formats import OUTPUT_SIZES
 from clipforge.import_auth import youtube_cookie_status
 from clipforge.narration import (
     audio_duration,
@@ -136,7 +137,7 @@ def default_split_boxes() -> list[SplitBox]:
 class Options(BaseModel):
     clip_seconds: int = Field(default=30, ge=10, le=120)
     max_clips: int = Field(default=25, ge=1, le=100)
-    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    aspect_ratio: Literal["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9", "21:9"] = "9:16"
     selection_mode: Literal["ai", "energy"] = "energy"
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
@@ -144,6 +145,7 @@ class Options(BaseModel):
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
     split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
+    split_fill: Literal["cover", "contain"] = "cover"
     hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "context", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
@@ -212,12 +214,14 @@ class ClipEditRequest(BaseModel):
 
     start: float = Field(ge=0)
     duration: float = Field(ge=3, le=120)
+    aspect_ratio: Literal["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9", "21:9"] | None = None
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop", "smart", "blur", "split"] = "crop"
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
     split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
+    split_fill: Literal["cover", "contain"] = "cover"
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
@@ -238,6 +242,8 @@ class ClipEditRequest(BaseModel):
     def exclusive_storytelling_mode(self):
         if self.voiceover and self.context_overlay:
             raise ValueError("Choose either contextual text or spoken story narration")
+        if self.framing == "split" and self.aspect_ratio not in (None, "9:16"):
+            raise ValueError("Split-screen framing requires the 9:16 vertical format")
         return self
 
 
@@ -562,8 +568,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     tracking_file = output / f"clip-{index:03d}-tracking.txt"
                     if plan_face_tracking(
                         source_path, candidate["start"], candidate["duration"],
-                        tracking_file, *({"9:16": (720, 1280), "16:9": (1280, 720),
-                                          "1:1": (720, 720)}[opts.aspect_ratio]),
+                        tracking_file, *OUTPUT_SIZES[opts.aspect_ratio],
                     ):
                         smart_track = tracking_file
                 render_clip(
@@ -574,6 +579,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     smart_track=smart_track, brand=brand_file, context=context_file,
                     split_boxes=[box.model_dump() for box in opts.split_boxes],
                     split_ratio=opts.split_ratio,
+                    split_fill=opts.split_fill,
                 )
                 os.replace(partial, destination)
                 try:
@@ -584,9 +590,11 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "filename": filename, "thumbnail": thumbnail, "number": index,
                     "captions_added": subtitles is not None, "effect": opts.effect,
                     "framing": opts.framing, "narration": opts.narration,
+                    "aspect_ratio": opts.aspect_ratio,
                     "split_boxes": [box.model_dump() for box in opts.split_boxes]
                     if opts.framing == "split" else [],
                     "split_ratio": opts.split_ratio if opts.framing == "split" else 0.5,
+                    "split_fill": opts.split_fill,
                     "script": script, "voiceover_added": voiceover is not None,
                     "context_added": context_file is not None,
                     "storyboard": storyboard["beats"] if storyboard else [],
@@ -885,6 +893,7 @@ async def submit_upload_batch(
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
     split_ratio: float = Form(0.5),
+    split_fill: str = Form("cover"),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -905,7 +914,8 @@ async def submit_upload_batch(
             clip_seconds=clip_seconds, max_clips=max_clips,
             aspect_ratio=aspect_ratio, selection_mode=selection_mode,
             caption_style=caption_style, effect=effect,
-            framing=framing, split_ratio=split_ratio, hook_style=hook_style,
+            framing=framing, split_ratio=split_ratio, split_fill=split_fill,
+            hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -974,6 +984,7 @@ async def submit_upload(
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
     split_ratio: float = Form(0.5),
+    split_fill: str = Form("cover"),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -991,7 +1002,8 @@ async def submit_upload(
         opts = Options(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
-            effect=effect, framing=framing, split_ratio=split_ratio, hook_style=hook_style,
+            effect=effect, framing=framing, split_ratio=split_ratio,
+            split_fill=split_fill, hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -1191,6 +1203,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             clip["revision_state"] = "rendering"
             _write(folder, job)
         edit = ClipEditRequest(**request)
+        export_ratio = edit.aspect_ratio or job["options"]["aspect_ratio"]
+        if edit.framing == "split" and export_ratio != "9:16":
+            raise ValueError("Split-screen framing requires the 9:16 vertical format")
         source = recover_source(folder, job)
         if source is None:
             raise FileNotFoundError("Original source is missing; the saved clip is unchanged")
@@ -1309,7 +1324,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             proposed = output / f"{base}-context.ass"
             if write_context_overlays(
                 storyboard["beats"], edit.duration, proposed,
-                aspect_ratio=job["options"]["aspect_ratio"],
+                aspect_ratio=export_ratio,
                 has_hook=hook_file is not None,
             ):
                 context_file = proposed
@@ -1322,18 +1337,17 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         smart_track = None
         if edit.framing == "smart":
             track = output / f"{base}-tracking.txt"
-            dimensions = {
-                "9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720),
-            }[job["options"]["aspect_ratio"]]
+            dimensions = OUTPUT_SIZES[export_ratio]
             if plan_face_tracking(source, edit.start, edit.duration, track, *dimensions):
                 smart_track = track
         render_clip(
-            source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
+            source, partial, edit.start, edit.duration, export_ratio,
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
             smart_track=smart_track, brand=brand_file, context=context_file,
             split_boxes=[box.model_dump() for box in edit.split_boxes],
             split_ratio=edit.split_ratio,
+            split_fill=edit.split_fill,
             source_volume=edit.source_volume, voice_volume=edit.voice_volume,
             music=music, music_volume=edit.music_volume,
         )
@@ -1354,7 +1368,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         quality_report = inspect_rendered_clip(
             destination,
             expected_duration=edit.duration,
-            aspect_ratio=job["options"]["aspect_ratio"],
+            aspect_ratio=export_ratio,
             source_has_audio=info["has_audio"],
             narration=revised_narration,
             script=revised_script,
@@ -1373,7 +1387,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
                     "context_added",
-                    "split_boxes", "split_ratio",
+                    "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
                     "segments", "music_enabled", "music_volume",
@@ -1383,9 +1397,11 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 filename=destination.name, thumbnail=thumbnail,
                 start=round(edit.start, 2), duration=round(edit.duration, 2),
                 title=edit.title.strip(), effect=edit.effect, framing=edit.framing,
+                aspect_ratio=export_ratio,
                 split_boxes=[box.model_dump() for box in edit.split_boxes]
                 if edit.framing == "split" else [],
                 split_ratio=edit.split_ratio if edit.framing == "split" else 0.5,
+                split_fill=edit.split_fill,
                 captions_added=subtitles is not None,
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",
