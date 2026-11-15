@@ -216,7 +216,7 @@ def render_clip(
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
     voiceover: Path | None = None, has_source_audio: bool = True,
     hook: Path | None = None, smart_track: Path | None = None,
-    brand: Path | None = None,
+    brand: Path | None = None, context: Path | None = None,
     split_boxes: list[dict[str, float]] | None = None,
     split_ratio: float = 0.5,
     source_volume: float | None = None, voice_volume: float = 1.0,
@@ -302,6 +302,9 @@ def render_clip(
         # Caption paths are server-owned UUID locations, never user-provided paths.
         safe_path = str(captions).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_path
+    if context is not None:
+        safe_context = str(context).replace("\\", "\\\\").replace(":", "\\:")
+        vf += ",ass=" + safe_context
     if hook is not None:
         safe_hook = str(hook).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_hook

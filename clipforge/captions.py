@@ -187,6 +187,75 @@ def write_storyboard_captions(beats: list[dict], clip_seconds: float,
     return write_captions(segments, 0, clip_seconds, style, path) if segments else False
 
 
+def write_context_overlays(
+    beats: list[dict], clip_seconds: float, path: Path,
+    *, aspect_ratio: str = "9:16", has_hook: bool = False,
+) -> bool:
+    """Burn sparse scene-grounded context above, separate from spoken captions.
+
+    Text comes from reviewed source-window beats, not from imagined events.
+    Brief overlays leave the original soundtrack and lower subtitle area alone.
+    """
+    dimensions = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}
+    if aspect_ratio not in dimensions:
+        raise ValueError("Unsupported contextual text aspect ratio")
+    width, height = dimensions[aspect_ratio]
+    max_chars = 29 if aspect_ratio == "9:16" else 44
+    lines = [
+        "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {width}",
+        f"PlayResY: {height}", "ScaledBorderAndShadow: yes", "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
+        "MarginL, MarginR, MarginV, Encoding",
+        f"Style: Context,DejaVu Sans,{44 if aspect_ratio == '9:16' else 38},"
+        "&H00FFFFFF,&H000000FF,&H00101010,&H80101010,"
+        f"-1,0,0,0,100,100,0,0,3,0,0,8,45,45,{240 if aspect_ratio == '9:16' else 80},1",
+        "", "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    written = 0
+    for beat in beats:
+        try:
+            start = max(0.0, float(beat["start"]))
+            end = min(float(clip_seconds), float(beat["end"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if has_hook:
+            start = max(start, 3.3)
+        # A short line per scene is readable without covering the action.
+        start += 0.12
+        end -= 0.2
+        if end - start < 0.8:
+            continue
+        words = " ".join(_safe(str(beat.get("text", ""))).split()).split()[:12]
+        if not words:
+            continue
+        wrapped = []
+        current = ""
+        for word in words:
+            if len(current) + len(word) + (1 if current else 0) > max_chars and current:
+                wrapped.append(current)
+                current = ""
+            current = (current + " " + word).strip()
+        if current:
+            wrapped.append(current)
+        if len(wrapped) > 2:
+            wrapped = wrapped[:2]
+            wrapped[1] = wrapped[1][:max_chars - 1].rstrip() + "…"
+        # Escape any ASS control markup *after* inserting our own line break.
+        label = r"\N".join(wrapped)
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Context,,0,0,0,,{label}"
+        )
+        written += 1
+    if not written:
+        return False
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return True
+
+
 
 def write_brand_sticker(text: str, duration: float, path: Path) -> bool:
     """Place user-defined channel text in a safe upper corner.

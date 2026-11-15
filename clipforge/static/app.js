@@ -105,7 +105,7 @@ function updateJourneyReview() {
   for (const [key, value] of [
     ['Source', source], ['Output', `${count} clips · ${$('clip-seconds').value}s · ${$('aspect-ratio').value}`],
     ['Framing', label], ['Captions', $('caption-style').value],
-    ['Narration', narration]
+    ['Video text / voice', narration]
   ]) {
     const line = document.createElement('div');
     const strong = document.createElement('strong');
@@ -467,9 +467,11 @@ function updateNarrationNotice() {
   const mode = $('narration').value;
   const note = $('narration-notice');
   if (mode === 'narrated') {
-    note.textContent = 'Narration is written scene by scene through the full clip, then timed to each section. ElevenLabs can charge once per section. Original audio remains underneath.';
+    note.textContent = 'For story-like videos: a scene-by-scene spoken voiceover. ElevenLabs may charge per section; original audio is lowered under the narrator.';
+  } else if (mode === 'context') {
+    note.textContent = 'Adds short on-screen context tied to each video scene. Keeps original audio untouched. Unlike subtitles, these labels describe the moment instead of repeating dialogue.';
   } else if (mode === 'script') {
-    note.textContent = 'Writes a timestamped story throughout the selected clip. No paid voiceover is generated.';
+    note.textContent = 'Saves a timestamped text script for review or copying. It is not burned into the video and no voice is generated.';
   } else {
     note.textContent = 'Use original video audio. No AI script or external text-to-speech charge.';
   }
@@ -938,18 +940,22 @@ function buildClipEditor(job, clip) {
   script.rows = 3;
   script.maxLength = 1200;
   script.value = clip.script || '';
-  script.placeholder = 'Optional custom narration script';
-  if (!clip.storyboard?.length) control('Commentator script (optional)', script);
+  script.placeholder = 'Optional story script';
+  if (!clip.storyboard?.length) control('Story script (optional)', script);
 
   let beatsChanged = false;
   const beatEditors = [];
   if (clip.storyboard?.length) {
     const beatList = el('div', 'timeline-beat-list');
-    beatList.append(el('strong', '', 'Scene narration · review every line before publishing'));
+    beatList.append(el('strong', '', clip.context_added
+      ? 'On-screen context · review every label before publishing'
+      : 'Timed scene script · review every line before publishing'));
     const beatRail = el('div', 'timeline-lane-rail timeline-beat-rail');
     for (const [index, beat] of clip.storyboard.entries()) {
       const row = el('label', 'timeline-beat-edit');
-      const count = Math.max(3, Math.floor((Number(beat.end) - Number(beat.start)) * 2.4));
+      const count = clip.context_added
+        ? Math.max(3, Math.min(12, Math.floor((Number(beat.end) - Number(beat.start)) * 1.5)))
+        : Math.max(3, Math.floor((Number(beat.end) - Number(beat.start)) * 2.4));
       row.append(el('span', '', `Scene ${index + 1} · ${time(beat.start)}–${time(beat.end)} · about ${count} words maximum`));
       const text = el('textarea');
       text.rows = 2;
@@ -964,7 +970,7 @@ function buildClipEditor(job, clip) {
         : (Number(clip.start) + Number(beat.start)) / totalSeconds)) + '%';
       segment.style.width = (100 * (Number(beat.end) - Number(beat.start)) /
         (cutsActive ? Number(clip.duration) : totalSeconds)) + '%';
-      segment.title = `Narration scene ${index + 1}`;
+      segment.title = `Scene text ${index + 1}`;
       segment.tabIndex = 0;
       segment.setAttribute('role', 'button');
       const seekScene = () => {
@@ -992,7 +998,7 @@ function buildClipEditor(job, clip) {
       beatRail.append(segment);
     }
     const voiceLane = el('div', 'timeline-lane');
-    voiceLane.append(el('span', 'timeline-lane-label', 'N1 · Narration scenes'), beatRail);
+    voiceLane.append(el('span', 'timeline-lane-label', 'T1 · Timed scene text'), beatRail);
     tracks.append(voiceLane);
     form.append(beatList);
   }
@@ -1079,11 +1085,18 @@ function buildClipEditor(job, clip) {
   const regenerateCheck = el('input');
   regenerateCheck.type = 'checkbox';
   regenerate.append(regenerateCheck, el('span', '',
-    'Regenerate timed narration based on this video segment (overrides the manual text above)'));
-  const basis = dropdown('Narration evidence', [
+    'Regenerate scene-aware text based on this video segment (replaces manual text)'));
+  const basis = dropdown('Text evidence', [
     ['video', 'Video frames + speech (requires local vision model)'],
     ['speech', 'Transcript only (no visual analysis)']
   ], 'video');
+
+  const contextRow = el('label', 'clip-edit-consent');
+  const context = el('input');
+  context.type = 'checkbox';
+  context.checked = Boolean(clip.context_added);
+  contextRow.append(context, el('span', '',
+    'Show short contextual text on screen (above speech captions; no voiceover)'));
 
   const voiceRow = el('label', 'clip-edit-consent');
   const voice = el('input');
@@ -1105,13 +1118,13 @@ function buildClipEditor(job, clip) {
   voice.addEventListener('change', () => { approvalRow.hidden = !voice.checked; });
 
   const explain = el('p', 'helper-note',
-    'Edits use the original source and create a new version. Scene text changes need new voice generation to be heard; narrator charges require approval. Trim changes cannot reuse scene-specific text.');
+    'Edits use the original source and create a new version. Contextual text is visual only and keeps your original audio. Story voiceover costs require approval. Trim changes need new scene timing.');
   const actions = el('div', 'clip-edit-actions');
   const save = el('button', 'small-action primary-action', 'Render revised clip');
   save.type = 'submit';
   if (['queued', 'rendering'].includes(clip.revision_state)) save.disabled = true;
   actions.append(save);
-  form.append(fields, regenerate, voiceRow, approvalRow, explain, actions);
+  form.append(fields, contextRow, regenerate, voiceRow, approvalRow, explain, actions);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -1135,21 +1148,29 @@ function buildClipEditor(job, clip) {
           part.start + part.duration > Number(job.duration || 0) + 0.05)))
       return notify('Combined cuts must last 3–120 seconds and stay within the source.');
     if (cutsChanged && beatsChanged && !regenerateCheck.checked)
-      return notify('Rearranged cuts need fresh narration timing. Select Regenerate narration.');
+      return notify('Rearranged cuts need fresh scene timing. Select Regenerate scene text.');
     if (cutsChanged && voice.checked && !regenerateCheck.checked)
-      return notify('Regenerate timed narration before voicing a rearranged video.');
+      return notify('Regenerate timed scene text before voicing a rearranged video.');
+    if (voice.checked && context.checked)
+      return notify('Choose contextual on-screen text or a spoken story voiceover for this export.');
+    if (context.checked && !regenerateCheck.checked && !beatEditors.length)
+      return notify('Regenerate scene-aware text first, then render contextual overlays.');
+    if (context.checked && !regenerateCheck.checked &&
+        (cutsChanged || cutsActive || Math.abs(begin - Number(clip.start)) > 0.05 ||
+         Math.abs(span - Number(clip.duration)) > 0.05))
+      return notify('Revised timing needs regenerated contextual text.');
     if (musicEnabled.checked && !musicReady)
       return notify('Upload a music track before enabling background music.');
     if (voice.checked && (!approval.checked ||
         (!script.value.trim() && !regenerateCheck.checked && !beatEditors.some(b => b.text.value.trim()))))
       return notify('Approve ElevenLabs usage and enter a script or enable video analysis.');
     const useBeatOverrides = !cutsChanged && beatEditors.length && !regenerateCheck.checked &&
-      (beatsChanged || voice.checked);
+      (beatsChanged || voice.checked || context.checked);
     if (beatsChanged && regenerateCheck.checked && !cutsActive)
       return notify('Choose your manually edited scene text or AI regeneration, not both.');
     if (useBeatOverrides && !cutsActive && (Math.abs(begin - Number(clip.start)) > 0.05 ||
         Math.abs(span - Number(clip.duration)) > 0.05))
-      return notify('Scene text is tied to the old timing. Keep the original trim or regenerate narration.');
+      return notify('Scene text is tied to the old timing. Keep the original trim or regenerate scene text.');
     const settings = {
       start: cutsActive ? 0 : begin, duration: cutsActive ? Number(cutDuration.toFixed(2)) : span,
       segments: orderedCuts, title: title.value.trim(),
@@ -1168,6 +1189,7 @@ function buildClipEditor(job, clip) {
       music_volume: Number(musicVolume.value) / 100,
       brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
+      context_overlay: context.checked,
       narration_basis: basis.value,
       voiceover_approved: approval.checked && voice.checked
     };
@@ -1298,6 +1320,7 @@ function card(job, mode = currentPage) {
       if (mode === 'library') description.append(tags);
       if (clip.reason) description.append(el('p', 'clip-ai-reason', clip.reason));
       if (clip.captions_added) tagTarget.append(el('span', 'clip-tag', 'CC · Captions burned in'));
+      if (clip.context_added) tagTarget.append(el('span', 'clip-tag', 'Scene-aware text'));
       if (clip.voiceover_added) tagTarget.append(el('span', 'clip-tag', '♬ Commentator voiceover'));
       if (clip.hook_style === 'headline') tagTarget.append(el('span', 'clip-tag', '✦ Opening hook'));
       if (clip.voice_marker) tagTarget.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
@@ -1329,7 +1352,7 @@ function card(job, mode = currentPage) {
             const row = el('div', 'script-beat');
             row.append(el('strong', 'script-beat-time',
               time(beat.start) + '–' + time(beat.end)),
-              el('span', '', beat.text || '[No reliable narration evidence]'));
+              el('span', '', beat.text || '[No reliable source evidence]'));
             scriptText.append(row);
           }
         } else scriptText.textContent = clip.script;
@@ -1895,9 +1918,9 @@ async function loadSettings() {
           ? ' Vision model ' + settings.vision.model + ' is installed.'
           : ' Vision model unavailable: ' + settings.vision.note;
       }
-      if (!settings.narration.elevenlabs_configured) {
+      if (!settings.narration.elevenlabs_configured && $('narration').value === 'narrated') {
         $('narration-notice').textContent +=
-          ' ElevenLabs is not connected; choose script-only or configure it in Settings.';
+          ' ElevenLabs is not connected. Choose contextual text or configure it in Settings.';
       }
     }
     if (currentPage === 'settings') {

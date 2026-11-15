@@ -51,7 +51,7 @@
       <section id="view-studio" class="page-view">
         <div class="eyebrow">CREATOR WORKSPACE <span class="accent-spark">✦</span></div>
         <h1>From long-form to <span>scroll-stopping.</span></h1>
-        <p class="lede">Turn one video into polished short-form stories with AI highlights, bold captions, and optional narrated commentary.</p>
+        <p class="lede">Turn long videos into publish-ready clips with smart framing, accurate speech captions, scene-aware text, and optional story voiceovers.</p>
         <section class="creator-panel" aria-label="Create clips">
           <nav class="studio-journey" aria-label="Clip creation steps">
             <button type="button" class="journey-step is-active" data-journey="0" aria-current="step"><span>1</span> Your video</button>
@@ -154,14 +154,14 @@
           </div></div>
           </div>
           <div class="journey-panel" data-journey-panel="3" hidden>
-          <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Commentator &amp; storytelling</h2><p>Scene-by-scene narration grounded in the full video, not just an intro</p></div></div>
+          <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Video text &amp; storytelling</h2><p>Add useful context on screen; spoken storytelling is optional</p></div></div>
           <div class="settings-grid">
-            <div class="field"><label for="narration">Narration mode</label><select id="narration"><option value="none">Original audio only</option><option value="script">Generate AI script · no voice</option><option value="narrated">AI script + commentator voice</option></select></div>
-            <div class="field"><label for="narration-style">Commentary style</label><select id="narration-style"><option value="energetic">Energetic / short-form</option><option value="documentary">Documentary / informative</option><option value="casual">Casual / conversational</option></select></div>
-            <div class="field"><label for="narration-language">Narration language</label><select id="narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
+            <div class="field"><label for="narration">Text &amp; voice</label><select id="narration"><option value="context" selected>Contextual on-screen text · original audio</option><option value="none">Original video only · no added text</option><option value="script">Save timed script only · not burned in</option><option value="narrated">Story narration + voiceover</option></select></div>
+            <div class="field"><label for="narration-style">Writing style</label><select id="narration-style"><option value="energetic">Energetic / short-form</option><option value="documentary">Documentary / informative</option><option value="casual">Casual / conversational</option></select></div>
+            <div class="field"><label for="narration-language">Text language</label><select id="narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
             <div class="field"><label for="narration-basis">Video evidence</label><select id="narration-basis"><option value="video" selected>Analyze video frames + spoken words</option><option value="speech">Spoken words only · no vision model</option></select></div>
           </div>
-          <p class="helper-note" id="narration-notice">Commentator audio uses ElevenLabs when connected. The original track stays low under the voice.</p>
+          <p class="helper-note" id="narration-notice">Short contextual labels appear during the relevant moments. Your original audio stays unchanged.</p>
           <div class="ai-notice" id="ai-notice">AI selection and scripts use a local Ollama model. Voiceover is an optional external service.</div>
           <div class="journey-review" id="journey-review" role="status"></div>
           <label class="rights"><input type="checkbox" id="rights"><span>I own or have permission to download, edit and republish this video.</span></label>
@@ -335,16 +335,16 @@
               <div class="field"><label for="settings-effect">Effect</label><select id="settings-effect"><option value="pop">Pop</option><option value="cinema">Cinema</option><option value="noir">Noir</option><option value="none">Natural</option></select></div>
               <div class="field"><label for="settings-framing">Framing</label><select id="settings-framing"><option value="smart">Smart face-aware crop</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
               <div class="field"><label for="settings-hook-style">Opening headline</label><select id="settings-hook-style"><option value="headline">Show AI headline</option><option value="none">No headline</option></select></div>
-              <div class="field"><label for="settings-narration">Narration</label><select id="settings-narration"><option value="none">Off</option><option value="script">AI script</option><option value="narrated">Voiceover</option></select></div>
+              <div class="field"><label for="settings-narration">Text &amp; voice</label><select id="settings-narration"><option value="context">On-screen context (recommended)</option><option value="none">Original only</option><option value="script">Script saved only</option><option value="narrated">Story voiceover</option></select></div>
               <div class="field"><label for="settings-narration-style">Commentary style</label><select id="settings-narration-style"><option value="energetic">Energetic</option><option value="documentary">Documentary</option><option value="casual">Casual</option></select></div>
               <div class="field"><label for="settings-narration-language">Language</label><select id="settings-narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
-              <div class="field"><label for="settings-narration-basis">Narration evidence</label><select id="settings-narration-basis"><option value="video">Video frames + speech</option><option value="speech">Speech only</option></select></div>
+              <div class="field"><label for="settings-narration-basis">Text evidence</label><select id="settings-narration-basis"><option value="video">Video frames + speech</option><option value="speech">Speech only</option></select></div>
               <div class="settings-actions"><button class="create-button" type="submit">Save preferences</button><span id="settings-feedback" aria-live="polite"></span></div>
             </form>
           </section>
           <div class="settings-side">
             <section class="settings-card">
-              <h2>Video-aware narration</h2>
+              <h2>Video-aware text analysis</h2>
               <p id="settings-vision-status">Checking local video-analysis configuration…</p>
               <p class="helper-note">Install the optional local Ollama vision model <code>moondream</code> to analyze sampled frames from each scene. No images are uploaded to ElevenLabs. Stills cannot establish movement between frames, and AI commentary requires human review.</p>
             </section>
