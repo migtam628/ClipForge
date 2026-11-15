@@ -12,6 +12,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from clipforge.formats import OUTPUT_SIZES
+
 
 def refine_speech_boundaries(
     candidates: list[dict], transcript: list[dict], source_duration: float,
@@ -138,7 +140,7 @@ def inspect_rendered_clip(
         }
         if abs(media["duration"] - expected_duration) > 1.25:
             fatal.append("render_duration_mismatch")
-        desired = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}
+        desired = OUTPUT_SIZES
         if aspect_ratio not in desired or (
             media["width"], media["height"]
         ) != desired.get(aspect_ratio):

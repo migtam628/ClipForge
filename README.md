@@ -190,28 +190,32 @@ future phase. No fake metrics or projected revenue have been added.
 ## Full-clip video-grounded narration (v0.9)
 
 The old one-paragraph commentator script used only the transcript and could
-finish long before the clip. In **Studio → Commentator & storytelling**, choose
-**Video frames + spoken words** and **Generate AI script** or **AI script +
-commentator voice**. The new workflow:
+finish long before the clip. In **Studio → Video text & storytelling**, choose
+**Video frames + spoken words** and either **Contextual on-screen text** or
+**Story narration + voiceover**. The scene-aware workflow:
 
 1. Divides each selected 3–120 second clip into **2–8 timed sections** covering
    the entire clip, from beginning to end.
 2. Uses Whisper to gather the **spoken words for each section**, then uses a
    local Ollama vision model to inspect **one sampled still frame per section**.
    Frames are kept in memory and not saved or sent to ElevenLabs.
-3. Asks the local language model to write a distinct narration beat for each
-   time section, constrained to evidence from that section. Sections with
-   insufficient evidence remain quiet rather than making up events.
+3. Asks the local language model for distinct, source-grounded text for each
+   section. In contextual mode it writes short on-screen phrases, **not** spoken
+   narration. Sections with insufficient evidence remain blank.
 4. Saves a **reviewable timed script** in Library: e.g. 00:00–00:08,
    00:08–00:15, etc. The script remains available even when narration audio
    is not requested.
-5. In **narrated** mode, synthesizes one voice segment for each nonempty
+5. In **contextual** mode, burns restrained text above the original speech
+   captions using FFmpeg/libass; any opening headline gets the first few
+   seconds alone. The source audio is unchanged and no external TTS is used.
+6. In **narrated** mode, synthesizes one voice segment for each nonempty
    section using ElevenLabs, then uses FFmpeg to align and concatenate audio
    to the timeline. Estimated narration captions also follow the sections
    instead of playing only at the beginning. These calls can incur **multiple
    TTS charges per clip**; choose script-only for a free review first.
-6. **Library → Refine this clip** offers **Regenerate timed narration** from
-   the selected segment, optionally with explicit consent for new TTS.
+7. **Library → Refine this clip** offers **Regenerate scene-aware text**, a
+   checkbox to retain contextual text in the revised MP4, and separate optional
+   consent for charged voiceovers.
 
 **Install the optional vision model on the Ollama Docker service before using
 Video frames + spoken words**:
@@ -589,15 +593,17 @@ Settings save to the persistent `clipforge_data` Docker volume. New jobs inherit
 the current Studio defaults; existing jobs and previously generated clips are not changed.
 API limits remain 1-100 clips, with 1/3/5 among the new visual presets.
 
-## AI commentator and narrated clips
+## Contextual text and optional story narration
 
-Choose one of three narration modes in **Studio**:
+Choose one of four text and voice modes in **Studio**:
 
-1. **Original audio only** - no script and no TTS usage.
-2. **Generate AI script** - Ollama writes a short English or Spanish commentary
-   derived from the actual speech transcript in each selected video segment.
-   The script appears in the Library; no external voice service is called.
-3. **AI script + commentator voice** - also sends the generated script to
+1. **Contextual on-screen text (recommended)** - each scene gets a brief,
+   relevant text label above the speech subtitles. Original audio stays at
+   normal volume without voiceover.
+2. **Original video only** - no added AI text or TTS.
+3. **Save timed script only** - Ollama writes reviewable English or Spanish
+   text based on the footage and speech, saved in Library but not in the MP4.
+4. **Story narration + voiceover** - also sends the generated script to
    ElevenLabs text-to-speech, mixes it into the video with quiet original
    audio (18% of source), and burns approximate script-aligned captions when
    captions are enabled. Style can be Energetic, Documentary, or Casual.
@@ -614,7 +620,7 @@ CLIPFORGE_ELEVENLABS_MODEL=eleven_multilingual_v2
 Do not paste real credentials into GitHub, screenshots or this chat.
 Recreate the ClipForge container after editing `.env`:
 `docker compose --profile ai up -d --force-recreate clipforge`.
-The Studio will display whether ElevenLabs is connected. Use Script-only mode
+The Studio will display whether ElevenLabs is connected. Use contextual text or Script-only mode
 until voiceover is configured. ElevenLabs requests require Internet access,
 can incur provider charges, and are **not automatically retried** after ambiguous
 network failures to avoid duplicate billable requests. Source media stays local;
@@ -745,7 +751,7 @@ Keep Docker volumes; do not run `docker compose down -v`.
 API schema: `/api/docs`.
 
 - `POST /api/jobs`: `{ "url": "https://...", "rights_confirmed": true, "clip_seconds": 30, "max_clips": 25, "aspect_ratio": "9:16", "selection_mode": "ai", "caption_style": "bold", "effect": "pop", "framing": "crop" }`
-- Optional job fields: `"narration": "none" | "script" | "narrated"`, `"narration_style": "energetic" | "documentary" | "casual"`, `"narration_language": "en" | "es"`.
+- Optional job fields: `"narration": "none" | "script" | "context" | "narrated"`, `"narration_style": "energetic" | "documentary" | "casual"`, `"narration_language": "en" | "es"`.
 - `POST /api/uploads`: multipart file plus the same options, separately.
 - `GET /api/jobs`, `/api/jobs/{id}`, `/api/ai/status`, `/api/publishing/platforms`.
 - `GET /api/settings` returns safe defaults and config status; `PUT /api/settings` saves validated non-secret `Options`.
@@ -753,7 +759,7 @@ API schema: `/api/docs`.
 - `POST /api/jobs/{id}/publish`: `{ "filename": "clip-001.mp4", "platform": "youtube", "title": "My short", "description": "#shorts", "visibility": "private", "approved": true }`. Requires a completed job, a clip that belongs to it, and configured server credentials.
 - `DELETE /api/jobs/{id}` (only when processing/publishing is not ongoing).
 
-API defaults remain backward compatible (energy selection/no captions); browser defaults opt into AI editing. An API request for `selection_mode="ai"` fails transparently if the model service is unavailable. Unknown or unsupported media links and DRM-protected streams cannot be guaranteed to work.
+API defaults remain backward compatible (energy selection/no captions/no added text); browser defaults opt into AI editing and contextual on-screen text. An API request for `selection_mode="ai"` fails transparently if the model service is unavailable. Unknown or unsupported media links and DRM-protected streams cannot be guaranteed to work.
 
 ## Tests and releases
 

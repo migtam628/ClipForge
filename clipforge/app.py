@@ -30,6 +30,7 @@ from clipforge.analytics import PLATFORMS, post_key, safe_csv, summarize, valid_
 from clipforge.captions import (
     write_brand_sticker,
     write_captions,
+    write_context_overlays,
     write_hook,
     write_narration_captions,
     write_storyboard_captions,
@@ -47,6 +48,7 @@ from clipforge.engine import (
     validate_url,
 )
 from clipforge.environment import field_schema, validate_patch
+from clipforge.formats import OUTPUT_SIZES
 from clipforge.import_auth import youtube_cookie_status
 from clipforge.narration import (
     audio_duration,
@@ -135,7 +137,7 @@ def default_split_boxes() -> list[SplitBox]:
 class Options(BaseModel):
     clip_seconds: int = Field(default=30, ge=10, le=120)
     max_clips: int = Field(default=25, ge=1, le=100)
-    aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
+    aspect_ratio: Literal["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9", "21:9"] = "9:16"
     selection_mode: Literal["ai", "energy"] = "energy"
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "none"
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
@@ -143,8 +145,9 @@ class Options(BaseModel):
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
     split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
+    split_fill: Literal["cover", "contain"] = "cover"
     hook_style: Literal["none", "headline"] = "none"
-    narration: Literal["none", "script", "narrated"] = "none"
+    narration: Literal["none", "script", "context", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
     narration_language: Literal["en", "es"] = "en"
     narration_basis: Literal["video", "speech"] = "speech"
@@ -211,12 +214,14 @@ class ClipEditRequest(BaseModel):
 
     start: float = Field(ge=0)
     duration: float = Field(ge=3, le=120)
+    aspect_ratio: Literal["9:16", "2:3", "3:4", "4:5", "1:1", "4:3", "3:2", "16:9", "21:9"] | None = None
     title: str = Field(default="", max_length=100)
     effect: Literal["none", "pop", "cinema", "noir"] = "none"
     framing: Literal["pad", "crop", "smart", "blur", "split"] = "crop"
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
     split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
+    split_fill: Literal["cover", "contain"] = "cover"
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
@@ -231,6 +236,15 @@ class ClipEditRequest(BaseModel):
     narration_basis: Literal["video", "speech"] = "video"
     voiceover: bool = False
     voiceover_approved: bool = False
+    context_overlay: bool = False
+
+    @model_validator(mode="after")
+    def exclusive_storytelling_mode(self):
+        if self.voiceover and self.context_overlay:
+            raise ValueError("Choose either contextual text or spoken story narration")
+        if self.framing == "split" and self.aspect_ratio not in (None, "9:16"):
+            raise ValueError("Split-screen framing requires the 9:16 vertical format")
+        return self
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -504,6 +518,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                         narration_dir / f"clip-{index:03d}-story.json",
                         source=source_path,
                         basis="video" if opts.narration_basis == "video" else "transcript",
+                        purpose="overlay" if opts.narration == "context" else "voice",
                     )
                     script = storyboard["script"]
                     if opts.narration == "narrated":
@@ -530,6 +545,14 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     proposed = output / f"clip-{index:03d}-hook.ass"
                     if write_hook(candidate["title"], candidate["duration"], proposed):
                         hook_file = proposed
+                context_file = None
+                if opts.narration == "context" and storyboard:
+                    proposed = output / f"clip-{index:03d}-context.ass"
+                    if write_context_overlays(
+                        storyboard["beats"], candidate["duration"], proposed,
+                        aspect_ratio=opts.aspect_ratio, has_hook=hook_file is not None,
+                    ):
+                        context_file = proposed
                 brand_file = None
                 if opts.brand_text.strip():
                     proposed = output / f"clip-{index:03d}-brand.ass"
@@ -545,8 +568,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     tracking_file = output / f"clip-{index:03d}-tracking.txt"
                     if plan_face_tracking(
                         source_path, candidate["start"], candidate["duration"],
-                        tracking_file, *({"9:16": (720, 1280), "16:9": (1280, 720),
-                                          "1:1": (720, 720)}[opts.aspect_ratio]),
+                        tracking_file, *OUTPUT_SIZES[opts.aspect_ratio],
                     ):
                         smart_track = tracking_file
                 render_clip(
@@ -554,9 +576,10 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     opts.aspect_ratio, captions=subtitles, effect=opts.effect,
                     framing=opts.framing, voiceover=voiceover,
                     has_source_audio=info["has_audio"], hook=hook_file,
-                    smart_track=smart_track, brand=brand_file,
+                    smart_track=smart_track, brand=brand_file, context=context_file,
                     split_boxes=[box.model_dump() for box in opts.split_boxes],
                     split_ratio=opts.split_ratio,
+                    split_fill=opts.split_fill,
                 )
                 os.replace(partial, destination)
                 try:
@@ -567,10 +590,13 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "filename": filename, "thumbnail": thumbnail, "number": index,
                     "captions_added": subtitles is not None, "effect": opts.effect,
                     "framing": opts.framing, "narration": opts.narration,
+                    "aspect_ratio": opts.aspect_ratio,
                     "split_boxes": [box.model_dump() for box in opts.split_boxes]
                     if opts.framing == "split" else [],
                     "split_ratio": opts.split_ratio if opts.framing == "split" else 0.5,
+                    "split_fill": opts.split_fill,
                     "script": script, "voiceover_added": voiceover is not None,
+                    "context_added": context_file is not None,
                     "storyboard": storyboard["beats"] if storyboard else [],
                     "analysis_basis": storyboard["analysis_basis"] if storyboard else None,
                     "frame_samples": storyboard["frame_samples"] if storyboard else 0,
@@ -770,7 +796,7 @@ def get_settings():
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
             selection_mode="ai", caption_style="karaoke", effect="pop",
             framing="smart", max_clips=5, hook_style="headline",
-            narration_basis="video",
+            narration_basis="video", narration="context",
         )
     except ValueError:
         defaults = Options()
@@ -867,6 +893,7 @@ async def submit_upload_batch(
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
     split_ratio: float = Form(0.5),
+    split_fill: str = Form("cover"),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -887,7 +914,8 @@ async def submit_upload_batch(
             clip_seconds=clip_seconds, max_clips=max_clips,
             aspect_ratio=aspect_ratio, selection_mode=selection_mode,
             caption_style=caption_style, effect=effect,
-            framing=framing, split_ratio=split_ratio, hook_style=hook_style,
+            framing=framing, split_ratio=split_ratio, split_fill=split_fill,
+            hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -956,6 +984,7 @@ async def submit_upload(
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
     split_ratio: float = Form(0.5),
+    split_fill: str = Form("cover"),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -973,7 +1002,8 @@ async def submit_upload(
         opts = Options(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
-            effect=effect, framing=framing, split_ratio=split_ratio, hook_style=hook_style,
+            effect=effect, framing=framing, split_ratio=split_ratio,
+            split_fill=split_fill, hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -1173,6 +1203,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             clip["revision_state"] = "rendering"
             _write(folder, job)
         edit = ClipEditRequest(**request)
+        export_ratio = edit.aspect_ratio or job["options"]["aspect_ratio"]
+        if edit.framing == "split" and export_ratio != "9:16":
+            raise ValueError("Split-screen framing requires the 9:16 vertical format")
         source = recover_source(folder, job)
         if source is None:
             raise FileNotFoundError("Original source is missing; the saved clip is unchanged")
@@ -1235,6 +1268,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 narration_dir / f"{base}-story.json",
                 source=source,
                 basis="video" if edit.narration_basis == "video" else "transcript",
+                purpose="overlay" if edit.context_overlay and not edit.voiceover else "voice",
             )
         if edit.voiceover:
             if not edit.voiceover_approved or not (edit.script.strip() or storyboard):
@@ -1280,6 +1314,21 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             if write_hook(edit.title, edit.duration, ass):
                 hook_file = ass
 
+        context_file = None
+        if edit.context_overlay and not edit.voiceover:
+            if not storyboard:
+                raise ValueError(
+                    "Contextual text requires scene beats. Review or regenerate "
+                    "the scene text before rendering."
+                )
+            proposed = output / f"{base}-context.ass"
+            if write_context_overlays(
+                storyboard["beats"], edit.duration, proposed,
+                aspect_ratio=export_ratio,
+                has_hook=hook_file is not None,
+            ):
+                context_file = proposed
+
         brand_file = None
         if edit.brand_text.strip():
             proposed = output / f"{base}-brand.ass"
@@ -1288,18 +1337,17 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         smart_track = None
         if edit.framing == "smart":
             track = output / f"{base}-tracking.txt"
-            dimensions = {
-                "9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720),
-            }[job["options"]["aspect_ratio"]]
+            dimensions = OUTPUT_SIZES[export_ratio]
             if plan_face_tracking(source, edit.start, edit.duration, track, *dimensions):
                 smart_track = track
         render_clip(
-            source, partial, edit.start, edit.duration, job["options"]["aspect_ratio"],
+            source, partial, edit.start, edit.duration, export_ratio,
             captions=subtitles, effect=edit.effect, framing=edit.framing,
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
-            smart_track=smart_track, brand=brand_file,
+            smart_track=smart_track, brand=brand_file, context=context_file,
             split_boxes=[box.model_dump() for box in edit.split_boxes],
             split_ratio=edit.split_ratio,
+            split_fill=edit.split_fill,
             source_volume=edit.source_volume, voice_volume=edit.voice_volume,
             music=music, music_volume=edit.music_volume,
         )
@@ -1312,14 +1360,15 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         except (OSError, RuntimeError):
             LOGGER.warning("Thumbnail unavailable for revised clip %s", base)
         revised_narration = (
-            "narrated" if voiceover else ("script" if (storyboard or edit.script.strip()) else "none")
+            "narrated" if voiceover else "context" if context_file else (
+                "script" if (storyboard or edit.script.strip()) else "none")
         )
         revised_script = storyboard["script"] if storyboard else edit.script.strip() or None
         revised_beats = storyboard["beats"] if storyboard else []
         quality_report = inspect_rendered_clip(
             destination,
             expected_duration=edit.duration,
-            aspect_ratio=job["options"]["aspect_ratio"],
+            aspect_ratio=export_ratio,
             source_has_audio=info["has_audio"],
             narration=revised_narration,
             script=revised_script,
@@ -1337,7 +1386,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 key: target.get(key) for key in (
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
-                    "split_boxes", "split_ratio",
+                    "context_added",
+                    "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
                     "segments", "music_enabled", "music_volume",
@@ -1347,13 +1397,16 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 filename=destination.name, thumbnail=thumbnail,
                 start=round(edit.start, 2), duration=round(edit.duration, 2),
                 title=edit.title.strip(), effect=edit.effect, framing=edit.framing,
+                aspect_ratio=export_ratio,
                 split_boxes=[box.model_dump() for box in edit.split_boxes]
                 if edit.framing == "split" else [],
                 split_ratio=edit.split_ratio if edit.framing == "split" else 0.5,
+                split_fill=edit.split_fill,
                 captions_added=subtitles is not None,
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",
                 voiceover_added=voiceover is not None,
+                context_added=context_file is not None,
                 face_tracking=smart_track is not None,
                 narration=revised_narration,
                 script=revised_script,
@@ -1431,32 +1484,37 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
                     for part, existing in zip(body.segments, prior)
                 )
                 if not unchanged:
-                    raise HTTPException(422, "Regenerate narration after rearranging video cuts")
+                    raise HTTPException(422, "Regenerate timed scene text after rearranging cuts")
         elif body.start + body.duration > source_length + 0.05:
             raise HTTPException(422, "Trim must fit inside the original video's duration")
         if body.music_enabled and not re.fullmatch(
             r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", job.get("music_file") or "",
         ):
             raise HTTPException(422, "Upload a music track before enabling the audio layer")
+        if (body.context_overlay and not body.manual_beats
+                and not body.regenerate_storyboard):
+            raise HTTPException(422, "Review existing scene text or regenerate contextual labels")
         if body.manual_beats:
             if body.regenerate_storyboard:
-                raise HTTPException(422, "Choose manual narration beats or AI regeneration")
+                raise HTTPException(422, "Choose manual scene text or AI regeneration")
             if abs(body.start - clip["start"]) > 0.05 or abs(
                 body.duration - clip["duration"]
             ) > 0.05:
-                raise HTTPException(422, "Retiming the clip requires regenerating narration beats")
+                raise HTTPException(422, "Retiming the clip requires regenerating scene text")
             original = clip.get("storyboard") or []
             if len(body.manual_beats) != len(original):
-                raise HTTPException(422, "The number of narration scenes must stay unchanged")
+                raise HTTPException(422, "The number of timed scenes must stay unchanged")
             for edited, existing in zip(body.manual_beats, original):
                 if (abs(edited.start - existing["start"]) > 0.05 or
                         abs(edited.end - existing["end"]) > 0.05):
-                    raise HTTPException(422, "Narration scene timestamps must match the clip")
-                max_words = max(3, int((edited.end - edited.start) * 2.4))
+                    raise HTTPException(422, "Scene timestamps must match the clip")
+                max_words = (max(3, min(12, int((edited.end - edited.start) * 1.5)))
+                             if body.context_overlay else
+                             max(3, int((edited.end - edited.start) * 2.4)))
                 if len(edited.text.split()) > max_words:
                     raise HTTPException(
                         422, f"Scene {edited.start:.1f}-{edited.end:.1f}s exceeds "
-                        f"the {max_words}-word voice timing limit",
+                        f"the {max_words}-word scene text limit",
                     )
         if body.voiceover and (
             not body.voiceover_approved or

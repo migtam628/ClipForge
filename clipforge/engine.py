@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from clipforge.formats import OUTPUT_SIZES
 from clipforge.import_auth import _is_youtube, youtube_cookie_session
 
 HOSTS = (
@@ -216,9 +217,10 @@ def render_clip(
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
     voiceover: Path | None = None, has_source_audio: bool = True,
     hook: Path | None = None, smart_track: Path | None = None,
-    brand: Path | None = None,
+    brand: Path | None = None, context: Path | None = None,
     split_boxes: list[dict[str, float]] | None = None,
     split_ratio: float = 0.5,
+    split_fill: str = "cover",
     source_volume: float | None = None, voice_volume: float = 1.0,
     music: Path | None = None, music_volume: float = 0.25,
 ) -> None:
@@ -227,13 +229,15 @@ def render_clip(
     if not all(math.isfinite(v) and 0 <= v <= 2
                for v in (source_volume, voice_volume, music_volume)):
         raise ValueError("Audio volumes must be finite values between 0 and 2")
-    size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
+    size = OUTPUT_SIZES[ratio]
     w, h = size
     if framing == "split":
         if ratio != "9:16":
             raise ValueError("Split-screen rendering requires 9:16")
         if not math.isfinite(split_ratio) or not 0.3 <= split_ratio <= 0.7:
             raise ValueError("Split-screen panel ratio must be between 0.3 and 0.7")
+        if split_fill not in {"cover", "contain"}:
+            raise ValueError("Split-screen fill must be cover or contain")
         top_height = round(h * split_ratio / 2) * 2
         bottom_height = h - top_height
         boxes = split_boxes or [
@@ -250,12 +254,15 @@ def render_clip(
                 and x + bw <= 1.000001 and y + bh <= 1.000001
             ):
                 raise ValueError("Invalid split-screen crop box")
-            regions.append(
-                f"crop=w=trunc(iw*{bw:.6f}/2)*2:h=trunc(ih*{bh:.6f}/2)*2:"
-                f"x=iw*{x:.6f}:y=ih*{y:.6f},"
-                f"scale={w}:{pane_height}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{pane_height},setsar=1"
-            )
+            crop = (f"crop=w=trunc(iw*{bw:.6f}/2)*2:h=trunc(ih*{bh:.6f}/2)*2:"
+                    f"x=iw*{x:.6f}:y=ih*{y:.6f},")
+            if split_fill == "cover":
+                crop += (f"scale={w}:{pane_height}:force_original_aspect_ratio=increase,"
+                         f"crop={w}:{pane_height},setsar=1")
+            else:
+                crop += (f"scale={w}:{pane_height}:force_original_aspect_ratio=decrease,"
+                         f"pad={w}:{pane_height}:(ow-iw)/2:(oh-ih)/2:color=0x152334,setsar=1")
+            regions.append(crop)
         vf = (
             "split=2[upper][lower];"
             f"[upper]{regions[0]}[top];"
@@ -302,6 +309,9 @@ def render_clip(
         # Caption paths are server-owned UUID locations, never user-provided paths.
         safe_path = str(captions).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_path
+    if context is not None:
+        safe_context = str(context).replace("\\", "\\\\").replace(":", "\\:")
+        vf += ",ass=" + safe_context
     if hook is not None:
         safe_hook = str(hook).replace("\\", "\\\\").replace(":", "\\:")
         vf += ",ass=" + safe_hook
