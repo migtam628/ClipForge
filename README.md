@@ -20,9 +20,17 @@ interview clips: the upper and lower panels are separately cropped from two
 user-positioned source rectangles. Choose a single local file to see a live
 preview, drag the two crop boxes over the people, and adjust their zoom sliders.
 The normalized crop coordinates are validated, saved with the job and applied
-to every rendered clip. For a URL or batch, the original footage is unavailable
-until downloaded: framing is saved, but the setup-time preview cannot show the
-remote video. Position boxes based on a local copy if precision is important.
+to every rendered clip. For YouTube watch, Shorts and youtu.be URLs, click
+**Load YouTube preview** in step 1 to opt in to an external YouTube player in
+step 2. The original-footage panel can play the embed and the vertical panel
+shows an **approximate still thumbnail crop guide** (not synchronized playback
+or a pixel-accurate preview). With a batch, the first URL is previewed. The
+embedded player might be unavailable when YouTube blocks playback on other
+sites; that does not change the import operation. Other URL providers still
+import normally, but do not yet have a setup-time embed. For precise edits,
+use a local source file or review the downloaded source in the Library timeline.
+Loading the YouTube preview makes a browser request to YouTube and its thumbnail
+host; merely pasting the URL does not trigger those requests.
 
 Other layouts remain available: smart face-aware framing, centered crop,
 blurred background and full-frame padding. Six caption styles are selectable
