@@ -41,3 +41,14 @@ def test_workspace_navigation_remains_available_in_responsive_styles():
     assert 'data-page="activity"' in html
     assert 'data-page="settings"' in html
     assert ".sidebar" in client.get("/assets/style.css").text
+
+
+def test_active_job_progress_is_shown_as_a_percentage():
+    javascript = client.get("/assets/app.js").text
+    stylesheet = client.get("/assets/style.css").text
+    assert "Math.min(100, Math.max(0, Math.round(Number(job.progress))))" in javascript
+    assert "'job-progress-value', `${progress}%`" in javascript
+    assert "bar.setAttribute('role', 'progressbar')" in javascript
+    assert "bar.setAttribute('aria-valuenow', String(progress))" in javascript
+    assert "fill.style.width = `${progress}%`" in javascript
+    assert ".job-progress-value" in stylesheet
