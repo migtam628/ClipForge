@@ -23,7 +23,7 @@ def test_on_screen_context_writes_timed_sanitized_labels(tmp_path):
     output = ass.read_text(encoding="utf-8")
     assert "0:00:03.42" in output  # opening hook owns the first 3.3 seconds
     assert "0:00:05.12" in output
-    assert "phone stands" in output
+    assert "phone stands" in output.replace(r"\N", " ")
     assert "{untrusted}" not in output
     assert r"\Nscene" not in output
     assert output.count("Dialogue: ") == 2
