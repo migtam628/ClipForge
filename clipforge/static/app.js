@@ -14,6 +14,7 @@ const labels = {studio: 'Studio', library: 'Clip Library',
   publishing: 'Publishing', 'posting-settings': 'Posting settings',
   analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
 $('page-crumb').textContent = labels[currentPage];
+$('mobile-page-title').textContent = labels[currentPage];
 document.title = 'ClipForge · ' + labels[currentPage];
 
 // Read the running backend version so this label never goes stale between releases.
@@ -41,6 +42,42 @@ for (const item of document.querySelectorAll('.nav-link[data-page]')) {
   item.classList.toggle('selected', active);
   if (active) item.setAttribute('aria-current', 'page');
 }
+
+// Mobile pages use a fixed tab bar. Secondary destinations stay in a native
+// modal dialog, which traps focus and supports Escape without custom key hacks.
+const mobileMoreDialog = $('mobile-more-dialog');
+const mobileMoreButton = $('mobile-more-button');
+const mobileMoreClose = $('mobile-more-close');
+const morePages = new Set(['posting-settings', 'analytics', 'settings']);
+for (const item of document.querySelectorAll('.mobile-nav-link[data-page], .mobile-more-link[data-page]')) {
+  const active = item.dataset.page === currentPage;
+  item.classList.toggle('selected', active);
+  if (active) item.setAttribute('aria-current', 'page');
+}
+mobileMoreButton.classList.toggle('selected', morePages.has(currentPage));
+function closeMobileMore(restoreFocus = true) {
+  if (mobileMoreDialog.open) mobileMoreDialog.close();
+  if (restoreFocus) mobileMoreButton.focus();
+}
+mobileMoreButton.addEventListener('click', () => {
+  if (mobileMoreDialog.open) closeMobileMore();
+  else mobileMoreDialog.showModal();
+  mobileMoreButton.setAttribute('aria-expanded', String(mobileMoreDialog.open));
+});
+mobileMoreClose.addEventListener('click', () => closeMobileMore());
+mobileMoreDialog.addEventListener('close', () => {
+  mobileMoreButton.setAttribute('aria-expanded', 'false');
+});
+mobileMoreDialog.addEventListener('cancel', () => {
+  mobileMoreButton.setAttribute('aria-expanded', 'false');
+});
+mobileMoreDialog.addEventListener('click', (event) => {
+  if (event.target === mobileMoreDialog) closeMobileMore(false);
+});
+// A tablet rotated to desktop width must not retain an invisible modal overlay.
+window.matchMedia('(min-width: 901px)').addEventListener('change', (event) => {
+  if (event.matches && mobileMoreDialog.open) closeMobileMore(false);
+});
 
 $('url-tab').addEventListener('click', () => toggleTab('url'));
 $('upload-tab').addEventListener('click', () => toggleTab('upload'));
@@ -73,6 +110,7 @@ function validateJourneySource() {
 
 function setJourneyStep(step) {
   if (step > 0 && !validateJourneySource()) return;
+  const previousStep = journeyStep;
   journeyStep = clamp(step, 0, 3);
   document.querySelector('.creator-panel').classList.toggle('is-framing', journeyStep === 1);
   document.querySelector('.main-content').classList.toggle('is-framing-workspace', journeyStep === 1);
@@ -91,6 +129,10 @@ function setJourneyStep(step) {
   $('journey-position').textContent = `Step ${journeyStep + 1} of 4`;
   if (journeyStep === 3) updateJourneyReview();
   notify('');
+  if (journeyStep !== previousStep && window.matchMedia('(max-width: 900px)').matches) {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+    document.querySelector('.creator-panel').scrollIntoView({block: 'start', behavior: motion});
+  }
 }
 
 function updateJourneyReview() {
