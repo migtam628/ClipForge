@@ -2,7 +2,7 @@ import subprocess
 
 import pytest
 
-from clipforge.engine import probe, render_clip, select_highlights, validate_url
+from clipforge.engine import probe, render_clip, render_sequence, select_highlights, validate_url
 
 
 @pytest.mark.parametrize(
@@ -75,6 +75,95 @@ def test_ffmpeg_render_and_probe(tmp_path):
     assert dest.stat().st_size > 500
     result = probe(dest)
     assert 1.5 <= result["duration"] <= 2.5
+
+
+def test_timeline_sequence_reorders_frame_accurate_source_ranges(tmp_path):
+    source = tmp_path / "two-colors.mp4"
+    sequence = tmp_path / "reordered.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=red:size=160x90:rate=12:duration=2",
+        "-f", "lavfi", "-i", "color=blue:size=160x90:rate=12:duration=2",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "libx264", str(source),
+    ], check=True, capture_output=True)
+    render_sequence(source, sequence, [
+        {"start": 2, "duration": 1}, {"start": 0, "duration": 1},
+    ], has_source_audio=False)
+    assert 1.8 < probe(sequence)["duration"] < 2.2
+
+    def pixel(at):
+        result = subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-ss", str(at),
+            "-i", str(sequence), "-frames:v", "1", "-vf", "scale=1:1,format=rgb24",
+            "-f", "rawvideo", "pipe:1",
+        ], check=True, capture_output=True)
+        return result.stdout[:3]
+
+    first, second = pixel(0.4), pixel(1.4)
+    assert first[2] > first[0] + 60  # Blue segment moved first.
+    assert second[0] > second[2] + 60  # Red segment moved second.
+
+
+def test_timeline_sequence_with_source_audio_and_mixed_music(tmp_path):
+    source = tmp_path / "source.mp4"
+    music = tmp_path / "music.wav"
+    narrator = tmp_path / "narrator.wav"
+    sequence = tmp_path / "sequence.mp4"
+    rendered = tmp_path / "mixed.mp4"
+    narrated = tmp_path / "narrated.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=10:duration=4",
+        "-f", "lavfi", "-i", "sine=frequency=330:duration=4",
+        "-shortest", "-c:v", "libx264", "-c:a", "aac", str(source),
+    ], check=True, capture_output=True)
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=660:duration=0.8", str(music),
+    ], check=True, capture_output=True)
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=880:duration=3", str(narrator),
+    ], check=True, capture_output=True)
+    render_sequence(source, sequence, [
+        {"start": 2, "duration": 1.5}, {"start": 0, "duration": 1.5},
+    ], has_source_audio=True)
+    assert probe(sequence)["has_audio"]
+    render_clip(sequence, rendered, 0, 3, "9:16", has_source_audio=True,
+                music=music, music_volume=0.25, source_volume=0.6)
+    info = probe(rendered)
+    assert info["has_audio"]
+    assert 2.8 < info["duration"] < 3.2
+    render_clip(sequence, narrated, 0, 3, "9:16", has_source_audio=True,
+                voiceover=narrator, music=music, music_volume=0.2,
+                source_volume=0.1, voice_volume=1.0)
+    assert probe(narrated)["has_audio"]
+
+
+def test_music_creates_audio_track_for_silent_source(tmp_path):
+    source = tmp_path / "silent.mp4"
+    music = tmp_path / "music.wav"
+    output = tmp_path / "with-music.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=red:size=160x90:rate=10:duration=2",
+        "-c:v", "libx264", str(source),
+    ], check=True, capture_output=True)
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=550:duration=0.6", str(music),
+    ], check=True, capture_output=True)
+    render_clip(source, output, 0, 2, "9:16", has_source_audio=False,
+                music=music, music_volume=0.15)
+    assert probe(output)["has_audio"]
+
+
+def test_timeline_rejects_invalid_segments(tmp_path):
+    with pytest.raises(ValueError, match="Invalid timeline segment"):
+        render_sequence(tmp_path / "in.mp4", tmp_path / "out.mp4", [
+            {"start": 0, "duration": float("nan")},
+        ], has_source_audio=False)
 
 
 def test_split_screen_renders_two_source_regions(tmp_path):

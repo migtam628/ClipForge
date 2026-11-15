@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
+import subprocess
 import threading
 import uuid
 import zipfile
@@ -39,6 +41,7 @@ from clipforge.engine import (
     download_video,
     probe,
     render_clip,
+    render_sequence,
     render_thumbnail,
     select_highlights,
     validate_url,
@@ -60,6 +63,7 @@ from clipforge.storyboard import build_storyboard, synthesize_timed_voice, visio
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024
+MAX_MUSIC_UPLOAD = 50 * 1024 * 1024
 MAX_BATCH_SOURCES = 100
 MAX_BATCH_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 MAX_QUEUED_SOURCES = 125
@@ -194,6 +198,13 @@ class TimedBeatEdit(BaseModel):
     text: str = Field(default="", max_length=350)
 
 
+class TimelineCut(BaseModel):
+    """An ordered excerpt from the saved original video, in source seconds."""
+
+    start: float = Field(ge=0, allow_inf_nan=False)
+    duration: float = Field(ge=0.5, le=120, allow_inf_nan=False)
+
+
 class ClipEditRequest(BaseModel):
     """Non-destructive clip revision; narrator use requires explicit consent."""
 
@@ -210,6 +221,9 @@ class ClipEditRequest(BaseModel):
     manual_beats: list[TimedBeatEdit] = Field(default_factory=list, max_length=16)
     source_volume: float | None = Field(default=None, ge=0, le=2)
     voice_volume: float = Field(default=1.0, ge=0, le=2)
+    segments: list[TimelineCut] = Field(default_factory=list, max_length=12)
+    music_enabled: bool = False
+    music_volume: float = Field(default=0.25, ge=0, le=2)
     brand_text: str = Field(default="", max_length=36)
     regenerate_storyboard: bool = False
     narration_basis: Literal["video", "speech"] = "video"
@@ -1143,6 +1157,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
     destroys a published or downloaded prior version.
     """
     destination = None
+    sequence_source = None
     try:
         with LOCK:
             job = _read(folder)
@@ -1155,13 +1170,34 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         if source is None:
             raise FileNotFoundError("Original source is missing; the saved clip is unchanged")
         info = probe(source)
-        if edit.start + edit.duration > info["duration"] + 0.05:
+        if not edit.segments and edit.start + edit.duration > info["duration"] + 0.05:
             raise ValueError("Clip trim extends past the end of the original video")
         output = folder / "clips"
         base = f"clip-{number:03d}-v{version:02d}"
         destination = output / f"{base}.mp4"
         partial = output / f".{base}.partial.mp4"
         partial.unlink(missing_ok=True)
+        if edit.segments:
+            sequence_source = output / f".{base}.sequence.mp4"
+            sequence_source.unlink(missing_ok=True)
+            render_sequence(
+                source, sequence_source,
+                [part.model_dump() for part in edit.segments],
+                has_source_audio=info["has_audio"],
+            )
+            source = sequence_source
+            info = probe(source)
+
+        music = None
+        if edit.music_enabled:
+            music_filename = job.get("music_file")
+            if not isinstance(music_filename, str) or not re.fullmatch(
+                r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", music_filename,
+            ):
+                raise ValueError("Upload a music track to this job before using it")
+            music = folder / "music" / music_filename
+            if not music.is_file():
+                raise FileNotFoundError("Selected music file is unavailable")
 
         voiceover = None
         subtitles = None
@@ -1180,10 +1216,12 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         if edit.regenerate_storyboard:
             narration_dir.mkdir(exist_ok=True)
             settings = Options(**job["options"])
-            transcript = load_json(folder / "transcript.json")
+            transcript_path = (narration_dir / f"{base}-transcript.json"
+                               if edit.segments else folder / "transcript.json")
+            transcript = load_json(transcript_path)
             if not isinstance(transcript, list):
                 transcript = transcribe(source, DATA_DIR / "models") if info["has_audio"] else []
-                save_json(folder / "transcript.json", transcript)
+                save_json(transcript_path, transcript)
             storyboard = build_storyboard(
                 transcript, edit.start, edit.duration,
                 settings.narration_style, settings.narration_language,
@@ -1215,12 +1253,14 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                         edit.duration, edit.caption_style, ass,
                     )
             else:
-                transcript = load_json(folder / "transcript.json")
+                transcript_path = (output / f"{base}-transcript.json"
+                                   if edit.segments else folder / "transcript.json")
+                transcript = load_json(transcript_path)
                 if not isinstance(transcript, list):
                     if not info["has_audio"]:
                         raise ValueError("Original video has no speech for automatic captions")
                     transcript = transcribe(source, DATA_DIR / "models")
-                    save_json(folder / "transcript.json", transcript)
+                    save_json(transcript_path, transcript)
                 added = write_captions(
                     transcript, edit.start, edit.duration, edit.caption_style, ass,
                 )
@@ -1253,6 +1293,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             smart_track=smart_track, brand=brand_file,
             split_boxes=[box.model_dump() for box in edit.split_boxes],
             source_volume=edit.source_volume, voice_volume=edit.voice_volume,
+            music=music, music_volume=edit.music_volume,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1291,6 +1332,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "split_boxes",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
+                    "segments", "music_enabled", "music_volume",
                 )
             })
             target.update(
@@ -1316,6 +1358,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 source_volume=(edit.source_volume if edit.source_volume is not None
                                else (0.18 if voiceover else 1.0)),
                 voice_volume=edit.voice_volume,
+                segments=[part.model_dump() for part in edit.segments],
+                music_enabled=music is not None, music_volume=edit.music_volume,
                 post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
@@ -1338,6 +1382,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             except (FileNotFoundError, StopIteration, ValueError):
                 LOGGER.warning("Clip metadata disappeared during revision failure")
     finally:
+        if sequence_source is not None:
+            sequence_source.unlink(missing_ok=True)
         if destination is not None:
             (folder / "clips" / ("." + destination.stem + ".partial.mp4")).unlink(
                 missing_ok=True
@@ -1359,8 +1405,30 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
             raise HTTPException(409, "This clip is already being edited")
         if clip.get("revision_count", 0) >= 20:
             raise HTTPException(429, "Maximum 20 revisions per clip")
-        if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
+        source_length = float(job.get("duration") or 0)
+        if body.segments:
+            total = sum(part.duration for part in body.segments)
+            if (not math.isfinite(total) or total > 120 or
+                    abs(total - body.duration) > 0.05 or body.start != 0):
+                raise HTTPException(422, "The sequence duration must match its ordered cuts")
+            if any(part.start + part.duration > source_length + 0.05
+                   for part in body.segments):
+                raise HTTPException(422, "A sequence segment exceeds the original source")
+            if body.manual_beats:
+                prior = clip.get("segments") or []
+                unchanged = len(prior) == len(body.segments) and all(
+                    abs(part.start - float(existing["start"])) <= 0.05 and
+                    abs(part.duration - float(existing["duration"])) <= 0.05
+                    for part, existing in zip(body.segments, prior)
+                )
+                if not unchanged:
+                    raise HTTPException(422, "Regenerate narration after rearranging video cuts")
+        elif body.start + body.duration > source_length + 0.05:
             raise HTTPException(422, "Trim must fit inside the original video's duration")
+        if body.music_enabled and not re.fullmatch(
+            r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", job.get("music_file") or "",
+        ):
+            raise HTTPException(422, "Upload a music track before enabling the audio layer")
         if body.manual_beats:
             if body.regenerate_storyboard:
                 raise HTTPException(422, "Choose manual narration beats or AI regeneration")
@@ -1415,6 +1483,63 @@ def preview_original_source(job_id: str):
         raise HTTPException(404, "The original source is no longer available")
     media_types = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
     return FileResponse(source, media_type=media_types.get(source.suffix.lower(), "application/octet-stream"))
+
+
+@app.post("/api/jobs/{job_id}/music", status_code=201)
+async def upload_timeline_music(
+    job_id: str, file: UploadFile = File(...), rights_confirmed: bool = Form(False),
+):
+    """Save a bounded, validated local soundtrack for optional timeline mixing."""
+    if not rights_confirmed:
+        raise HTTPException(400, "Confirm you have permission to use this music")
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Music uploads require a completed video job")
+    if any(clip.get("revision_state") in {"queued", "rendering"}
+           for clip in job.get("clips", [])):
+        raise HTTPException(409, "Wait until active edits finish before changing music")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in {".mp3", ".m4a", ".wav", ".ogg"}:
+        raise HTTPException(400, "Upload MP3, M4A, WAV, or OGG audio")
+    music_dir = folder / "music"
+    music_dir.mkdir(exist_ok=True)
+    if len(list(music_dir.glob("track-*"))) >= 8:
+        raise HTTPException(429, "Maximum eight music uploads per job")
+    name = f"track-{uuid.uuid4().hex}{suffix}"
+    destination = music_dir / name
+    size = 0
+    try:
+        with destination.open("xb") as output:
+            while block := await file.read(1024 * 1024):
+                size += len(block)
+                if size > MAX_MUSIC_UPLOAD:
+                    raise HTTPException(413, "Music file exceeds 50 MB")
+                output.write(block)
+        if not size:
+            raise HTTPException(400, "Empty music file")
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_type", "-of", "json",
+                str(destination),
+            ], capture_output=True, text=True, timeout=30, check=True)
+            streams = json.loads(result.stdout).get("streams", [])
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                json.JSONDecodeError) as exc:
+            raise HTTPException(422, "Unable to read the uploaded audio") from exc
+        if not streams or streams[0].get("codec_type") != "audio":
+            raise HTTPException(422, "File contains no playable audio stream")
+        with LOCK:
+            job = _read(folder)
+            job["music_file"] = name
+            _write(folder, job)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+    return {"music_file": name, "bytes": size}
 
 
 @app.get("/api/jobs/{job_id}/clips/{filename}")
