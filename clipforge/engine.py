@@ -157,6 +157,60 @@ def select_highlights(
     ]
 
 
+def render_sequence(source: Path, dest: Path, segments: list[dict],
+                    *, has_source_audio: bool) -> None:
+    """Assemble source excerpts in supplied order, using frame-accurate trims.
+
+    Every segment refers to the same server-owned original video. Re-encoding
+    normalizes timestamps across cuts and avoids keyframe-only inaccuracies.
+    """
+    if not 1 <= len(segments) <= 12:
+        raise ValueError("A sequence must contain 1–12 segments")
+    total = 0.0
+    filters = []
+    inputs = []
+    for index, item in enumerate(segments):
+        start, duration = float(item["start"]), float(item["duration"])
+        if not (math.isfinite(start) and math.isfinite(duration)
+                and start >= 0 and duration >= 0.5):
+            raise ValueError("Invalid timeline segment")
+        total += duration
+        filters.append(
+            f"[0:v:0]trim=start={start:.3f}:duration={duration:.3f},"
+            f"setpts=PTS-STARTPTS[v{index}]"
+        )
+        inputs.append(f"[v{index}]")
+        if has_source_audio:
+            filters.append(
+                f"[0:a:0]atrim=start={start:.3f}:duration={duration:.3f},"
+                f"asetpts=PTS-STARTPTS[a{index}]"
+            )
+            inputs.append(f"[a{index}]")
+    if total > 120:
+        raise ValueError("A sequence cannot exceed 120 seconds")
+    audio_flag = 1 if has_source_audio else 0
+    outputs = "[outv][outa]" if has_source_audio else "[outv]"
+    filters.append(
+        "".join(inputs) +
+        f"concat=n={len(segments)}:v=1:a={audio_flag}{outputs}"
+    )
+    args = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
+        "-i", str(source), "-filter_complex", ";".join(filters),
+        "-map", "[outv]",
+    ]
+    if has_source_audio:
+        args += ["-map", "[outa]"]
+    else:
+        args += ["-an"]
+    args += [
+        "-t", f"{total:.3f}", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac",
+        "-b:a", "128k", "-movflags", "+faststart", str(dest),
+    ]
+    subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+
+
 def render_clip(
     source: Path, dest: Path, start: float, length: float, ratio: str,
     captions: Path | None = None, effect: str = "none", framing: str = "pad",
@@ -165,11 +219,12 @@ def render_clip(
     brand: Path | None = None,
     split_boxes: list[dict[str, float]] | None = None,
     source_volume: float | None = None, voice_volume: float = 1.0,
+    music: Path | None = None, music_volume: float = 0.25,
 ) -> None:
     if source_volume is None:
         source_volume = 0.18 if voiceover is not None else 1.0
     if not all(math.isfinite(v) and 0 <= v <= 2
-               for v in (source_volume, voice_volume)):
+               for v in (source_volume, voice_volume, music_volume)):
         raise ValueError("Audio volumes must be finite values between 0 and 2")
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
@@ -254,19 +309,32 @@ def render_clip(
     ]
     if voiceover is not None:
         args.extend(["-i", str(voiceover)])
+    if music is not None:
+        args.extend(["-stream_loop", "-1", "-i", str(music)])
     args += ["-t", str(length), "-map", "0:v:0"]
-    if voiceover is not None:
-        # Keep original speech under the commentator without padding infinite audio.
-        # FFmpeg -t truncates the final output to the clip length.
+    if voiceover is not None or music is not None:
+        # Mix only existing tracks. Music loops under the source and narrator,
+        # but the final output is always bounded by -t.
+        filters = []
+        tracks = []
         if has_source_audio:
-            audio_filter = (
-                f"[0:a:0]volume={source_volume:.3f},asetpts=PTS-STARTPTS[bed];"
-                f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[voice];"
-                "[bed][voice]amix=inputs=2:duration=longest:"
-                "dropout_transition=0:normalize=0[aout]"
-            )
+            filters.append(f"[0:a:0]volume={source_volume:.3f},asetpts=PTS-STARTPTS[bed]")
+            tracks.append("[bed]")
+        if voiceover is not None:
+            filters.append(f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[voice]")
+            tracks.append("[voice]")
+        if music is not None:
+            index = 2 if voiceover is not None else 1
+            filters.append(f"[{index}:a:0]volume={music_volume:.3f},"
+                           f"atrim=duration={length:.3f},asetpts=PTS-STARTPTS[music]")
+            tracks.append("[music]")
+        if len(tracks) == 1:
+            filters.append(f"{tracks[0]}anull[aout]")
         else:
-            audio_filter = f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[aout]"
+            filters.append("".join(tracks) +
+                           f"amix=inputs={len(tracks)}:duration=longest:"
+                           "dropout_transition=0:normalize=0[aout]")
+        audio_filter = ";".join(filters)
         args += ["-filter_complex", audio_filter, "-map", "[aout]"]
     else:
         args += ["-map", "0:a:0?"]

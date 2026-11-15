@@ -194,6 +194,120 @@ def test_timeline_manual_beats_render_as_reviewed_script(tmp_path, monkeypatch):
     assert not result["voiceover_added"]
 
 
+def test_timeline_rejects_invalid_cut_spans_and_stale_narration(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    endpoint = f"/api/jobs/{job_id}/clips/1/edit"
+    valid = [{"start": 10, "duration": 4}, {"start": 20, "duration": 4}]
+    for payload in (
+        {"start": 0, "duration": 10, "segments": valid},  # Sum is eight.
+        {"start": 5, "duration": 8, "segments": valid},  # Output starts at zero.
+        {"start": 0, "duration": 8,
+         "segments": [{"start": 59, "duration": 8}]},
+        {"start": 0, "duration": 8, "segments": valid,
+         "manual_beats": [{"start": 0, "end": 8, "text": "stale"}]},
+        {"start": 0, "duration": 8, "segments": valid, "music_enabled": True},
+    ):
+        response = client.post(endpoint, json=payload)
+        assert response.status_code == 422, response.text
+    assert module._read(folder)["clips"][0].get("revision_state") is None
+
+
+def test_timeline_allows_reviewed_narration_when_cut_order_is_unchanged(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    job = module._read(folder)
+    existing = [{"start": 10, "duration": 4}, {"start": 20, "duration": 4}]
+    job["clips"][0].update(
+        start=0, duration=8, segments=existing,
+        storyboard=[{"start": 0, "end": 4, "text": "Scene one"},
+                    {"start": 4, "end": 8, "text": "Scene two"}],
+    )
+    module._write(folder, job)
+    monkeypatch.setattr(module.POOL, "submit", lambda *_args: None)
+    request = {
+        "start": 0, "duration": 8, "segments": existing,
+        "manual_beats": [{"start": 0, "end": 4, "text": "Reviewed one"},
+                         {"start": 4, "end": 8, "text": "Reviewed two"}],
+    }
+    endpoint = f"/api/jobs/{job_id}/clips/1/edit"
+    changed = {**request, "segments": [{"start": 20, "duration": 4},
+                                       {"start": 10, "duration": 4}]}
+    assert client.post(endpoint, json=changed).status_code == 422
+    assert client.post(endpoint, json=request).status_code == 202
+
+
+def test_timeline_cut_worker_renders_sequence_without_overwriting_old_clip(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    observed = {}
+
+    def fake_sequence(source, dest, segments, **kwargs):
+        observed["cuts"] = segments
+        observed["sequence_has_audio"] = kwargs["has_source_audio"]
+        dest.write_bytes(b"assembled-source")
+
+    def fake_render(source, dest, start, length, *_args, **kwargs):
+        observed["render"] = (source.name, start, length, kwargs)
+        dest.write_bytes(b"rendered" * 250)
+
+    monkeypatch.setattr(module, "probe", lambda *_: {"duration": 60, "has_audio": False})
+    monkeypatch.setattr(module, "render_sequence", fake_sequence)
+    monkeypatch.setattr(module, "render_clip", fake_render)
+    monkeypatch.setattr(module, "render_thumbnail", lambda *_: None)
+    response = client.post(f"/api/jobs/{job_id}/clips/1/edit", json={
+        "start": 0, "duration": 8, "caption_style": "none",
+        "segments": [{"start": 15, "duration": 4}, {"start": 5, "duration": 4}],
+    })
+    assert response.status_code == 202, response.text
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        result = module._read(folder)["clips"][0]
+        if result.get("revision_state") in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    assert result["revision_state"] == "completed", result.get("revision_error")
+    assert observed["cuts"] == [{"start": 15, "duration": 4},
+                                {"start": 5, "duration": 4}]
+    assert observed["render"][0].endswith(".sequence.mp4")
+    assert observed["render"][1:3] == (0, 8)
+    assert result["segments"] == observed["cuts"]
+    assert result["revision_history"][0]["filename"] == "clip-001.mp4"
+    assert (folder / "clips" / "clip-001.mp4").is_file()
+    assert not (folder / "clips" / ".clip-001-v01.sequence.mp4").exists()
+
+
+def test_music_upload_accepts_audio_only_and_rejects_invalid_media(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    endpoint = f"/api/jobs/{job_id}/music"
+    assert client.post(endpoint, files={
+        "file": ("test.mp3", b"contents", "audio/mpeg"),
+    }).status_code == 400
+    wrong = client.post(endpoint, data={"rights_confirmed": "true"},
+                        files={"file": ("not-a-song.txt", b"text", "text/plain")})
+    assert wrong.status_code == 400
+    invalid = client.post(endpoint, data={"rights_confirmed": "true"},
+                          files={"file": ("fake.mp3", b"bad", "audio/mpeg")})
+    assert invalid.status_code == 422
+    assert not module._read(folder).get("music_file")
+
+    music = tmp_path / "short.wav"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8", str(music),
+    ], check=True, capture_output=True)
+    success = client.post(endpoint, data={"rights_confirmed": "true"}, files={
+        "file": ("licensed.wav", music.read_bytes(), "audio/wav"),
+    })
+    assert success.status_code == 201, success.text
+    file_name = success.json()["music_file"]
+    assert (folder / "music" / file_name).is_file()
+    assert module._read(folder)["music_file"] == file_name
+
+
 def test_revision_validations_no_paid_tts_without_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     job_id, folder = _completed_job(tmp_path)

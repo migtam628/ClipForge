@@ -585,8 +585,159 @@ function buildClipEditor(job, clip) {
   videoLane.append(el('span', 'timeline-lane-label', 'V1 · Original video'), clipRail, trim);
   tracks.append(videoLane);
   repaintSelection();
+  // Cut-list editor: each item is a source-time range, ordered on the output
+  // timeline. The original file is never changed.
+  let cutsActive = Array.isArray(clip.segments) && clip.segments.length > 0;
+  let cuts = cutsActive ? clip.segments.map(s => ({start: Number(s.start), duration: Number(s.duration)}))
+    : [{start: Number(clip.start), duration: Number(clip.duration)}];
+  let selectedCut = 0;
+  let previewingCuts = false;
+  let previewCutIndex = 0;
+  const cutPanel = el('div', 'timeline-cut-panel');
+  const cutControls = el('div', 'timeline-cut-actions');
+  const sequenceRail = el('div', 'timeline-sequence-rail');
+  const cutList = el('div', 'timeline-cut-list');
+  const cutNotice = el('p', 'helper-note',
+    'Drag numbered blocks to reorder, or use the arrow buttons.');
+  const cutLabel = el('strong', '', 'V2 · Cut & reorder');
+  function cutButton(text, action) {
+    const button = el('button', 'small-action', text);
+    button.type = 'button';
+    button.addEventListener('click', action);
+    return button;
+  }
+  const drawCuts = () => {
+    sequenceRail.replaceChildren();
+    cutList.replaceChildren();
+    if (!cutsActive) {
+      cutNotice.textContent = 'Original continuous clip. Split at the playhead to enable editing.';
+      return;
+    }
+    const total = cuts.reduce((sum, part) => sum + part.duration, 0);
+    cutNotice.textContent = `Output length ${time(total)} · ${cuts.length} ordered segments. ` +
+      'Drag blocks or use arrows; narration timing must be regenerated after changing cuts.';
+    for (const [index, part] of cuts.entries()) {
+      const block = el('button', 'timeline-sequence-block', String(index + 1));
+      block.type = 'button';
+      block.title = `${time(part.start)} → ${time(part.start + part.duration)}`;
+      block.style.flex = String(Math.max(0.5, part.duration));
+      block.classList.toggle('active', index === selectedCut);
+      block.draggable = true;
+      block.addEventListener('click', () => {
+        selectedCut = index;
+        sourceVideo.currentTime = part.start;
+        drawCuts();
+      });
+      block.addEventListener('dragstart', event => {
+        event.dataTransfer?.setData('text/plain', String(index));
+      });
+      block.addEventListener('dragover', event => event.preventDefault());
+      block.addEventListener('drop', event => {
+        event.preventDefault();
+        const from = Number(event.dataTransfer?.getData('text/plain'));
+        if (!Number.isInteger(from) || from < 0 || from >= cuts.length || from === index) return;
+        const [moving] = cuts.splice(from, 1);
+        const target = index;
+        cuts.splice(target, 0, moving);
+        selectedCut = target;
+        drawCuts();
+      });
+      sequenceRail.append(block);
+      const row = el('div', 'timeline-cut-row');
+      const jump = cutButton(`${index + 1} · ${time(part.start)} + ${time(part.duration)}`, () => {
+        selectedCut = index;
+        previewingCuts = false;
+        sourceVideo.pause();
+        sourceVideo.currentTime = part.start;
+        drawCuts();
+      });
+      jump.classList.toggle('active', selectedCut === index);
+      jump.style.flex = String(Math.max(1, part.duration));
+      row.append(jump);
+      row.append(cutButton('↑', () => {
+        if (index === 0) return;
+        [cuts[index - 1], cuts[index]] = [cuts[index], cuts[index - 1]];
+        selectedCut = index - 1;
+        drawCuts();
+      }));
+      row.append(cutButton('↓', () => {
+        if (index === cuts.length - 1) return;
+        [cuts[index + 1], cuts[index]] = [cuts[index], cuts[index + 1]];
+        selectedCut = index + 1;
+        drawCuts();
+      }));
+      row.append(cutButton('×', () => {
+        if (cuts.length === 1) return notify('Keep at least one video segment.');
+        cuts.splice(index, 1);
+        selectedCut = Math.min(index, cuts.length - 1);
+        drawCuts();
+      }));
+      cutList.append(row);
+    }
+  };
+  cutControls.append(
+    cutButton('✂ Split at playhead', () => {
+      const at = Number(sourceVideo.currentTime);
+      const index = cutsActive && cuts[selectedCut] &&
+        at > cuts[selectedCut].start + 0.5 &&
+        at < cuts[selectedCut].start + cuts[selectedCut].duration - 0.5
+        ? selectedCut : cuts.findIndex(part =>
+          at > part.start + 0.5 && at < part.start + part.duration - 0.5);
+      if (index < 0) return notify('Position the playhead at least 0.5s inside a segment.');
+      if (cuts.length >= 12) return notify('The timeline is limited to 12 segments.');
+      const original = cuts[index];
+      const first = {start: original.start, duration: Number((at - original.start).toFixed(2))};
+      const second = {start: Number(at.toFixed(2)),
+        duration: Number((original.start + original.duration - at).toFixed(2))};
+      cuts.splice(index, 1, first, second);
+      cutsActive = true;
+      selectedCut = index + 1;
+      drawCuts();
+    }),
+    cutButton('+ Add selected range', () => {
+      if (cuts.length >= 12) return notify('The timeline is limited to 12 segments.');
+      const begin = Number(start.value), length = Number(duration.value);
+      if (!Number.isFinite(begin) || !Number.isFinite(length) || length < 0.5 ||
+          begin < 0 || begin + length > totalSeconds + 0.05)
+        return notify('Choose a valid source in/out range first.');
+      cuts.push({start: begin, duration: length});
+      cutsActive = true;
+      selectedCut = cuts.length - 1;
+      drawCuts();
+    }),
+    cutButton('▶ Preview cut order', () => {
+      if (!cutsActive) return notify('Split the clip or add a source range first.');
+      previewCutIndex = 0;
+      previewingCuts = true;
+      sourceVideo.currentTime = cuts[0].start;
+      sourceVideo.play().catch(() => { previewingCuts = false; });
+    }),
+    cutButton('↺ Reset cuts', () => {
+      previewingCuts = false;
+      sourceVideo.pause();
+      cutsActive = false;
+      cuts = [{start: Number(clip.start), duration: Number(clip.duration)}];
+      selectedCut = 0;
+      drawCuts();
+    })
+  );
+  sourceVideo.addEventListener('timeupdate', () => {
+    if (!previewingCuts) return;
+    const part = cuts[previewCutIndex];
+    if (!part || sourceVideo.currentTime < part.start + part.duration - 0.08) return;
+    previewCutIndex++;
+    if (previewCutIndex >= cuts.length) {
+      previewingCuts = false;
+      sourceVideo.pause();
+    } else {
+      sourceVideo.currentTime = cuts[previewCutIndex].start;
+    }
+  });
+  ruler.addEventListener('input', () => { previewingCuts = false; });
+  cutPanel.append(cutLabel, cutControls, sequenceRail, cutList, cutNotice);
+  drawCuts();
   timeline.append(monitor, tracks);
-  form.append(timeline);
+  form.append(timeline, cutPanel);
 
   const effect = dropdown('Color treatment', [
     ['none', 'Natural'], ['pop', 'Vibrant pop'],
@@ -641,13 +792,26 @@ function buildClipEditor(job, clip) {
       beatEditors.push({start: beat.start, end: beat.end, text});
       beatList.append(row);
       const segment = el('span', 'timeline-beat-segment', String(index + 1));
-      segment.style.left = (100 * (Number(clip.start) + Number(beat.start)) / totalSeconds) + '%';
-      segment.style.width = (100 * (Number(beat.end) - Number(beat.start)) / totalSeconds) + '%';
+      segment.style.left = (100 * (cutsActive ? Number(beat.start) / Number(clip.duration)
+        : (Number(clip.start) + Number(beat.start)) / totalSeconds)) + '%';
+      segment.style.width = (100 * (Number(beat.end) - Number(beat.start)) /
+        (cutsActive ? Number(clip.duration) : totalSeconds)) + '%';
       segment.title = `Narration scene ${index + 1}`;
       segment.tabIndex = 0;
       segment.setAttribute('role', 'button');
       const seekScene = () => {
-        sourceVideo.currentTime = Number(clip.start) + Number(beat.start);
+        let seekTo = Number(clip.start) + Number(beat.start);
+        if (cutsActive) {
+          let remaining = Number(beat.start);
+          for (const part of cuts) {
+            if (remaining <= part.duration) {
+              seekTo = part.start + remaining;
+              break;
+            }
+            remaining -= part.duration;
+          }
+        }
+        sourceVideo.currentTime = seekTo;
         text.focus();
       };
       segment.addEventListener('click', seekScene);
@@ -687,7 +851,61 @@ function buildClipEditor(job, clip) {
   const sourceVolume = volumeSlider('Original audio',
     Number(clip.source_volume ?? (clip.voiceover_added ? 0.18 : 1)));
   const voiceVolume = volumeSlider('Narrator voice', Number(clip.voice_volume ?? 1));
+  const musicVolume = volumeSlider('Music track', Number(clip.music_volume ?? 0.25));
   form.append(audioMixer);
+  const musicPanel = el('div', 'timeline-music-panel');
+  const musicLane = el('div', 'timeline-lane');
+  musicLane.append(el('span', 'timeline-lane-label', 'A2 · Background music'),
+    el('div', 'timeline-lane-rail timeline-music-rail', 'Optional uploaded music · loops to clip length'));
+  tracks.append(musicLane);
+  const musicToggle = el('label', 'clip-edit-consent');
+  const musicEnabled = el('input');
+  musicEnabled.type = 'checkbox';
+  let musicReady = Boolean(job.music_file);
+  musicEnabled.checked = Boolean(clip.music_enabled && musicReady);
+  musicToggle.append(musicEnabled, el('span', '', 'Mix background music into this export'));
+  const musicRightsRow = el('label', 'clip-edit-consent');
+  const musicRights = el('input');
+  musicRights.type = 'checkbox';
+  musicRightsRow.append(musicRights, el('span', '',
+    'I own or have permission to use the uploaded music in my clips'));
+  const musicUpload = el('input', 'timeline-music-input');
+  musicUpload.type = 'file';
+  musicUpload.accept = '.mp3,.m4a,.wav,.ogg,audio/*';
+  musicUpload.setAttribute('aria-label', 'Upload music track');
+  const musicStatus = el('span', 'helper-note', musicReady
+    ? 'Music track available on this job' : 'No music uploaded');
+  musicUpload.addEventListener('change', async () => {
+    const file = musicUpload.files?.[0];
+    if (!file) return;
+    if (!musicRights.checked) {
+      musicUpload.value = '';
+      return notify('Confirm music usage rights before uploading.');
+    }
+    if (file.size > 50 * 1024 * 1024) return notify('Music must be 50 MB or smaller.');
+    const data = new FormData();
+    data.append('file', file);
+    data.append('rights_confirmed', 'true');
+    musicUpload.disabled = true;
+    musicStatus.textContent = 'Uploading music…';
+    try {
+      const response = await fetch(`/api/jobs/${job.id}/music`, {method: 'POST', body: data});
+      const result = await response.json();
+      if (!response.ok) throw new Error(typeof result.detail === 'string'
+        ? result.detail : 'Could not upload music');
+      musicReady = true;
+      musicEnabled.checked = true;
+      musicStatus.textContent = 'Music ready · ' + file.name;
+      notify('Music saved for this job. It will be mixed when you render.');
+    } catch (error) {
+      musicStatus.textContent = 'Music upload failed';
+      notify(error.message);
+    } finally {
+      musicUpload.disabled = false;
+    }
+  });
+  musicPanel.append(musicToggle, musicRightsRow, musicUpload, musicStatus);
+  form.append(musicPanel);
 
   const regenerate = el('label', 'clip-edit-consent');
   const regenerateCheck = el('input');
@@ -731,32 +949,54 @@ function buildClipEditor(job, clip) {
     event.preventDefault();
     const begin = Number(start.value);
     const span = Number(duration.value);
-    if (!Number.isFinite(begin) || !Number.isFinite(span) ||
+    const cutDuration = cuts.reduce((sum, item) => sum + item.duration, 0);
+    const orderedCuts = cutsActive ? cuts.map(item => ({
+      start: item.start, duration: item.duration
+    })) : [];
+    const priorCuts = Array.isArray(clip.segments) ? clip.segments : [];
+    const cutsChanged = cutsActive && (orderedCuts.length !== priorCuts.length ||
+      orderedCuts.some((part, index) =>
+        Math.abs(part.start - Number(priorCuts[index]?.start)) > 0.05 ||
+        Math.abs(part.duration - Number(priorCuts[index]?.duration)) > 0.05));
+    if (!cutsActive && (!Number.isFinite(begin) || !Number.isFinite(span) ||
         span < 3 || span > 120 || begin < 0 ||
-        begin + span > Number(job.duration || 0) + 0.05)
+        begin + span > Number(job.duration || 0) + 0.05))
       return notify('Trim needs to fit within the original video (3–120 seconds).');
+    if (cutsActive && (cutDuration < 3 || cutDuration > 120 ||
+        cuts.some(part => part.duration < 0.5 || part.start < 0 ||
+          part.start + part.duration > Number(job.duration || 0) + 0.05)))
+      return notify('Combined cuts must last 3–120 seconds and stay within the source.');
+    if (cutsChanged && beatsChanged && !regenerateCheck.checked)
+      return notify('Rearranged cuts need fresh narration timing. Select Regenerate narration.');
+    if (cutsChanged && voice.checked && !regenerateCheck.checked)
+      return notify('Regenerate timed narration before voicing a rearranged video.');
+    if (musicEnabled.checked && !musicReady)
+      return notify('Upload a music track before enabling background music.');
     if (voice.checked && (!approval.checked ||
         (!script.value.trim() && !regenerateCheck.checked && !beatEditors.some(b => b.text.value.trim()))))
       return notify('Approve ElevenLabs usage and enter a script or enable video analysis.');
-    const useBeatOverrides = beatEditors.length && !regenerateCheck.checked &&
+    const useBeatOverrides = !cutsChanged && beatEditors.length && !regenerateCheck.checked &&
       (beatsChanged || voice.checked);
-    if (beatsChanged && regenerateCheck.checked)
+    if (beatsChanged && regenerateCheck.checked && !cutsActive)
       return notify('Choose your manually edited scene text or AI regeneration, not both.');
-    if (useBeatOverrides && (Math.abs(begin - Number(clip.start)) > 0.05 ||
+    if (useBeatOverrides && !cutsActive && (Math.abs(begin - Number(clip.start)) > 0.05 ||
         Math.abs(span - Number(clip.duration)) > 0.05))
       return notify('Scene text is tied to the old timing. Keep the original trim or regenerate narration.');
     const settings = {
-      start: begin, duration: span, title: title.value.trim(),
+      start: cutsActive ? 0 : begin, duration: cutsActive ? Number(cutDuration.toFixed(2)) : span,
+      segments: orderedCuts, title: title.value.trim(),
       effect: effect.value, framing: framing.value,
       split_boxes: clip.split_boxes?.length === 2 ? clip.split_boxes :
         job.options.split_boxes,
       caption_style: captions.value, hook_style: hook.value,
-      script: script.value.trim(), voiceover: voice.checked,
+      script: cutsActive ? '' : script.value.trim(), voiceover: voice.checked,
       manual_beats: useBeatOverrides ? beatEditors.map(b => ({
         start: b.start, end: b.end, text: b.text.value.trim()
       })) : [],
       source_volume: Number(sourceVolume.value) / 100,
       voice_volume: Number(voiceVolume.value) / 100,
+      music_enabled: musicEnabled.checked,
+      music_volume: Number(musicVolume.value) / 100,
       brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
       narration_basis: basis.value,

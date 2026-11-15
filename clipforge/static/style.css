@@ -167,6 +167,31 @@ a.brand{color:inherit;text-decoration:none}
 .timeline-beat-edit textarea{width:100%;min-width:0;box-sizing:border-box;resize:vertical;
   background:#181d29;color:#f6f7fb;border:1px solid #3f4654;border-radius:7px;
   font:inherit;font-size:12px;line-height:1.45;padding:9px}
+.timeline-cut-panel{padding:12px;margin-bottom:16px;border:1px solid #364557;
+  background:#151e2b;border-radius:9px}
+.timeline-cut-panel>strong{display:block;font-size:12px;color:#d4f268;margin-bottom:10px}
+.timeline-cut-actions{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
+.timeline-cut-actions button{font-size:11px;padding:7px 10px}
+.timeline-sequence-rail{display:flex;gap:3px;min-height:46px;margin:3px 0 12px;
+  background:#111827;border:1px solid #344257;border-radius:7px;padding:5px}
+.timeline-sequence-block{min-width:0;cursor:grab;background:#315876;color:#f1f6ff;
+  border:1px solid #759abc;border-radius:5px;font-weight:800}
+.timeline-sequence-block.active{outline:2px solid #d4f268;outline-offset:-2px}
+.timeline-sequence-block:active{cursor:grabbing}
+.timeline-cut-list{display:flex;flex-direction:column;gap:6px}
+.timeline-cut-row{display:flex;gap:5px;min-width:0}
+.timeline-cut-row button{font-size:11px;padding:7px 10px;min-width:28px}
+.timeline-cut-row button:first-child{min-width:0;text-align:left;overflow:hidden;
+  white-space:nowrap;text-overflow:ellipsis;background:#274d69;color:#f2f6fd}
+.timeline-cut-row button.active:first-child{border-color:#d4f268;background:#385f70}
+.timeline-cut-panel .helper-note{margin-top:9px!important}
+.timeline-music-rail{min-height:32px;background:#2c2845;border-color:#6a4c87;
+  color:#dfc9ef;display:flex;align-items:center;padding:0 10px}
+.timeline-music-panel{display:flex;flex-wrap:wrap;gap:8px 14px;
+  align-items:center;margin:8px 0 16px}
+.timeline-music-panel .clip-edit-consent{margin:0}
+.timeline-music-input{max-width:280px;min-width:150px;color:#d9dfec;font-size:11px}
+.timeline-music-panel .helper-note{margin:0!important;font-size:11px!important}
 @media(max-width:930px){
   .timeline-workspace,.clip-editor.timeline-expanded .timeline-workspace{grid-template-columns:1fr}
   .timeline-source-monitor{height:290px}

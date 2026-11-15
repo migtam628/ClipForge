@@ -255,10 +255,31 @@ windows to reduce missed transitions, with a more natural word budget of about
 2.1 words per second when evidence supports it. This is a pacing target, not a
 license to fabricate details or repeat unsupported claims.
 
-This first editor release has one source video track and no destructive cuts.
-Multi-source drag-and-drop arranging, split/merge, transition effects, B-roll,
-music tracks, keyframes, waveform editing, and export-to-Premiere XML remain
-planned work, **not** shipped features.
+The initial timeline release provided one source video track. The second
+release below adds non-destructive cut assembly and music mixing. Multi-source
+drag-and-drop arranging, independent overlays, transitions, B-roll, keyframes,
+waveform editing, and export-to-Premiere XML remain planned work, **not** shipped.
+
+### Timeline cut assembly and soundtrack (second release)
+
+The timeline now supports splitting the original source at the playhead,
+adding a source in/out selection, deleting ranges, and dragging numbered blocks
+or using the up/down buttons to change their output order. **Preview cut order** plays the selected ranges
+sequentially from the local source; it does not include effects or music until
+the final render. The user can upload an MP3, M4A, WAV or OGG soundtrack (up to
+50 MB, with usage-rights confirmation), enable or disable it per revision, and mix its volume independently of
+the source and narrator. The soundtrack loops to fill the output length.
+
+Cut assembly is frame-accurate and non-destructive: at most 12 source excerpts,
+each at least 0.5 seconds, with a combined 3–120-second output. The assembler
+builds an intermediate video from the local source before the normal ClipForge
+renderer, which can increase processing time on CPU-only servers. Cut changes
+invalidate old source timestamps; captions are re-transcribed from the newly
+assembled sequence, and users must regenerate scene-specific narration after
+reordering. Uploaded music remains local to the job. The current cut editor
+reorders excerpts from **one source**; independent video layers, waveform
+editing, transitions, and drag-and-drop between different source files remain
+future work.
 
 ## Creator-directed clip discovery and publishing drafts (v0.10)
 
