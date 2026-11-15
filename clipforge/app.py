@@ -186,6 +186,14 @@ class BatchUrlRequest(Options):
     voice_spend_approved: bool = False
 
 
+class TimedBeatEdit(BaseModel):
+    """An explicitly reviewed narration line tied to an existing scene."""
+
+    start: float = Field(ge=0, le=120)
+    end: float = Field(gt=0, le=120)
+    text: str = Field(default="", max_length=350)
+
+
 class ClipEditRequest(BaseModel):
     """Non-destructive clip revision; narrator use requires explicit consent."""
 
@@ -199,6 +207,9 @@ class ClipEditRequest(BaseModel):
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
+    manual_beats: list[TimedBeatEdit] = Field(default_factory=list, max_length=16)
+    source_volume: float | None = Field(default=None, ge=0, le=2)
+    voice_volume: float = Field(default=1.0, ge=0, le=2)
     brand_text: str = Field(default="", max_length=36)
     regenerate_storyboard: bool = False
     narration_basis: Literal["video", "speech"] = "video"
@@ -1157,6 +1168,15 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         storyboard = None
         timed_beats = None
         narration_dir = folder / "narration"
+        if edit.manual_beats:
+            beats = [{"start": b.start, "end": b.end, "text": b.text.strip(),
+                      "basis": "human_reviewed"} for b in edit.manual_beats]
+            storyboard = {
+                "beats": beats,
+                "script": " ".join(b["text"] for b in beats if b["text"])[:1200],
+                "analysis_basis": "manual_review",
+                "frame_samples": 0,
+            }
         if edit.regenerate_storyboard:
             narration_dir.mkdir(exist_ok=True)
             settings = Options(**job["options"])
@@ -1232,6 +1252,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
             smart_track=smart_track, brand=brand_file,
             split_boxes=[box.model_dump() for box in edit.split_boxes],
+            source_volume=edit.source_volume, voice_volume=edit.voice_volume,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1292,6 +1313,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 analysis_basis=(storyboard["analysis_basis"] if storyboard else "manual"),
                 frame_samples=(storyboard["frame_samples"] if storyboard else 0),
                 brand_text=edit.brand_text.strip(),
+                source_volume=(edit.source_volume if edit.source_volume is not None
+                               else (0.18 if voiceover else 1.0)),
+                voice_volume=edit.voice_volume,
                 post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
@@ -1337,9 +1361,30 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
             raise HTTPException(429, "Maximum 20 revisions per clip")
         if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
             raise HTTPException(422, "Trim must fit inside the original video's duration")
+        if body.manual_beats:
+            if body.regenerate_storyboard:
+                raise HTTPException(422, "Choose manual narration beats or AI regeneration")
+            if abs(body.start - clip["start"]) > 0.05 or abs(
+                body.duration - clip["duration"]
+            ) > 0.05:
+                raise HTTPException(422, "Retiming the clip requires regenerating narration beats")
+            original = clip.get("storyboard") or []
+            if len(body.manual_beats) != len(original):
+                raise HTTPException(422, "The number of narration scenes must stay unchanged")
+            for edited, existing in zip(body.manual_beats, original):
+                if (abs(edited.start - existing["start"]) > 0.05 or
+                        abs(edited.end - existing["end"]) > 0.05):
+                    raise HTTPException(422, "Narration scene timestamps must match the clip")
+                max_words = max(3, int((edited.end - edited.start) * 2.4))
+                if len(edited.text.split()) > max_words:
+                    raise HTTPException(
+                        422, f"Scene {edited.start:.1f}-{edited.end:.1f}s exceeds "
+                        f"the {max_words}-word voice timing limit",
+                    )
         if body.voiceover and (
             not body.voiceover_approved or
-            not (body.script.strip() or body.regenerate_storyboard)
+            not (body.script.strip() or body.regenerate_storyboard or
+                 any(beat.text.strip() for beat in body.manual_beats))
         ):
             raise HTTPException(
                 400, "Explicit TTS approval and a script or storyboard are required"
@@ -1356,6 +1401,20 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
         _write(folder, job)
         POOL.submit(_edit_clip_worker, folder, number, body.model_dump())
     return {"id": job_id, "clip": number, "state": "queued"}
+
+
+@app.get("/api/jobs/{job_id}/source")
+def preview_original_source(job_id: str):
+    """Stream the local source for timeline scrubbing, never an arbitrary path."""
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Source preview is available for completed jobs")
+    source = recover_source(folder, job)
+    if source is None or not source.is_file():
+        raise HTTPException(404, "The original source is no longer available")
+    media_types = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
+    return FileResponse(source, media_type=media_types.get(source.suffix.lower(), "application/octet-stream"))
 
 
 @app.get("/api/jobs/{job_id}/clips/{filename}")
