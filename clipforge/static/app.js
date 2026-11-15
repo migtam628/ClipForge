@@ -427,9 +427,28 @@ function el(tag, cls, content) {
 
 function buildClipEditor(job, clip) {
   const editor = el('details', 'clip-editor');
-  editor.append(el('summary', '', '✦ Refine this clip'));
+  editor.append(el('summary', '', '✦ Open timeline editor'));
   const form = el('form', 'clip-editor-form');
   const fields = el('div', 'clip-edit-fields');
+  const workspaceBar = el('div', 'timeline-workspace-bar');
+  workspaceBar.append(el('strong', '', 'ClipForge Timeline'));
+  const focusButton = el('button', 'small-action', '⛶ Expand editor');
+  focusButton.type = 'button';
+  focusButton.addEventListener('click', () => {
+    editor.classList.toggle('timeline-expanded');
+    editor.open = true;
+    focusButton.textContent = editor.classList.contains('timeline-expanded')
+      ? '↙ Exit full screen' : '⛶ Expand editor';
+  });
+  editor.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && editor.classList.contains('timeline-expanded')) {
+      editor.classList.remove('timeline-expanded');
+      focusButton.textContent = '⛶ Expand editor';
+      event.stopPropagation();
+    }
+  });
+  workspaceBar.append(focusButton);
+  form.append(workspaceBar);
 
   function control(labelText, node) {
     const field = el('label', 'clip-edit-field');
@@ -472,6 +491,103 @@ function buildClipEditor(job, clip) {
   duration.required = true;
   control('Length (seconds)', duration);
 
+  const timeline = el('section', 'timeline-workspace');
+  timeline.setAttribute('aria-label', 'Source video timeline');
+  const monitor = el('div', 'timeline-monitor');
+  const sourceVideo = el('video', 'timeline-source-monitor');
+  sourceVideo.controls = true;
+  sourceVideo.preload = 'metadata';
+  sourceVideo.src = `/api/jobs/${job.id}/source`;
+  const monitorHelp = el('p', 'helper-note',
+    'Source monitor · scrubbing previews the original footage before a new render.');
+  sourceVideo.addEventListener('error', () => {
+    monitorHelp.textContent = 'Original source preview is unavailable in this browser. ' +
+      'Keep using the numerical trim controls; the source file remains on the server.';
+  });
+  monitor.append(sourceVideo, monitorHelp);
+  const tracks = el('div', 'timeline-tracks');
+  const time = (seconds) => {
+    const value = Math.max(0, Number(seconds) || 0);
+    return String(Math.floor(value / 60)).padStart(2, '0') + ':' +
+      (value % 60).toFixed(1).padStart(4, '0');
+  };
+  const timeCode = el('div', 'timeline-timecode');
+  const currentTime = el('strong', '', time(clip.start));
+  const selectionTime = el('span', '', 'IN ' + time(clip.start) +
+    ' · OUT ' + time(clip.start + clip.duration));
+  timeCode.append(currentTime, selectionTime);
+  const ruler = el('input', 'timeline-scrubber');
+  ruler.type = 'range';
+  ruler.min = '0';
+  ruler.max = String(job.duration || (clip.start + clip.duration));
+  ruler.step = '0.1';
+  ruler.value = String(clip.start);
+  ruler.setAttribute('aria-label', 'Scrub original video');
+  ruler.addEventListener('input', () => {
+    sourceVideo.currentTime = Number(ruler.value);
+    currentTime.textContent = time(ruler.value);
+  });
+  sourceVideo.addEventListener('timeupdate', () => {
+    ruler.value = String(sourceVideo.currentTime);
+    currentTime.textContent = time(sourceVideo.currentTime);
+  });
+  sourceVideo.addEventListener('loadedmetadata', () => {
+    sourceVideo.currentTime = Math.min(Number(clip.start), sourceVideo.duration || 0);
+  }, {once: true});
+  tracks.append(timeCode, ruler);
+
+  const totalSeconds = Math.max(3, Number(job.duration) || clip.start + clip.duration);
+  const clipRail = el('div', 'timeline-lane-rail');
+  const selection = el('div', 'timeline-video-selection');
+  function repaintSelection() {
+    const begin = Number(start.value);
+    const end = begin + Number(duration.value);
+    selection.style.left = (100 * begin / totalSeconds) + '%';
+    selection.style.width = (100 * (end - begin) / totalSeconds) + '%';
+    selection.textContent = time(begin) + ' – ' + time(end);
+    selectionTime.textContent = 'IN ' + time(begin) + ' · OUT ' + time(end);
+  }
+  clipRail.append(selection);
+  const trim = el('div', 'timeline-trim-controls');
+  const inHandle = el('input');
+  const outHandle = el('input');
+  for (const [handle, label] of [[inHandle, 'Trim in'], [outHandle, 'Trim out']]) {
+    handle.type = 'range';
+    handle.min = '0';
+    handle.max = String(totalSeconds);
+    handle.step = '0.1';
+    handle.setAttribute('aria-label', label);
+  }
+  inHandle.value = start.value;
+  outHandle.value = String(Number(start.value) + Number(duration.value));
+  inHandle.addEventListener('input', () => {
+    const end = Number(outHandle.value);
+    start.value = String(Math.min(Number(inHandle.value), end - 3).toFixed(1));
+    duration.value = String((end - Number(start.value)).toFixed(1));
+    inHandle.value = start.value;
+    repaintSelection();
+    sourceVideo.currentTime = Number(start.value);
+  });
+  outHandle.addEventListener('input', () => {
+    const end = Math.max(Number(outHandle.value), Number(start.value) + 3);
+    outHandle.value = String(end.toFixed(1));
+    duration.value = String((end - Number(start.value)).toFixed(1));
+    repaintSelection();
+    sourceVideo.currentTime = Math.max(Number(start.value), end - 0.2);
+  });
+  for (const field of [start, duration]) field.addEventListener('input', () => {
+    inHandle.value = start.value;
+    outHandle.value = String(Number(start.value) + Number(duration.value));
+    repaintSelection();
+  });
+  trim.append(inHandle, outHandle);
+  const videoLane = el('div', 'timeline-lane');
+  videoLane.append(el('span', 'timeline-lane-label', 'V1 · Original video'), clipRail, trim);
+  tracks.append(videoLane);
+  repaintSelection();
+  timeline.append(monitor, tracks);
+  form.append(timeline);
+
   const effect = dropdown('Color treatment', [
     ['none', 'Natural'], ['pop', 'Vibrant pop'],
     ['cinema', 'Cinematic'], ['noir', 'Black & white']
@@ -504,7 +620,74 @@ function buildClipEditor(job, clip) {
   script.maxLength = 1200;
   script.value = clip.script || '';
   script.placeholder = 'Optional custom narration script';
-  control('Commentator script (optional)', script);
+  if (!clip.storyboard?.length) control('Commentator script (optional)', script);
+
+  let beatsChanged = false;
+  const beatEditors = [];
+  if (clip.storyboard?.length) {
+    const beatList = el('div', 'timeline-beat-list');
+    beatList.append(el('strong', '', 'Scene narration · review every line before publishing'));
+    const beatRail = el('div', 'timeline-lane-rail timeline-beat-rail');
+    for (const [index, beat] of clip.storyboard.entries()) {
+      const row = el('label', 'timeline-beat-edit');
+      const count = Math.max(3, Math.floor((Number(beat.end) - Number(beat.start)) * 2.4));
+      row.append(el('span', '', `Scene ${index + 1} · ${time(beat.start)}–${time(beat.end)} · about ${count} words maximum`));
+      const text = el('textarea');
+      text.rows = 2;
+      text.maxLength = 350;
+      text.value = beat.text || '';
+      text.addEventListener('input', () => { beatsChanged = true; });
+      row.append(text);
+      beatEditors.push({start: beat.start, end: beat.end, text});
+      beatList.append(row);
+      const segment = el('span', 'timeline-beat-segment', String(index + 1));
+      segment.style.left = (100 * (Number(clip.start) + Number(beat.start)) / totalSeconds) + '%';
+      segment.style.width = (100 * (Number(beat.end) - Number(beat.start)) / totalSeconds) + '%';
+      segment.title = `Narration scene ${index + 1}`;
+      segment.tabIndex = 0;
+      segment.setAttribute('role', 'button');
+      const seekScene = () => {
+        sourceVideo.currentTime = Number(clip.start) + Number(beat.start);
+        text.focus();
+      };
+      segment.addEventListener('click', seekScene);
+      segment.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          seekScene();
+        }
+      });
+      beatRail.append(segment);
+    }
+    const voiceLane = el('div', 'timeline-lane');
+    voiceLane.append(el('span', 'timeline-lane-label', 'N1 · Narration scenes'), beatRail);
+    tracks.append(voiceLane);
+    form.append(beatList);
+  }
+
+  const audioLane = el('div', 'timeline-lane');
+  const audioRail = el('div', 'timeline-lane-rail timeline-audio-rail',
+    'Original source audio · editable level');
+  audioLane.append(el('span', 'timeline-lane-label', 'A1 · Source audio'), audioRail);
+  tracks.append(audioLane);
+  const audioMixer = el('div', 'timeline-audio-mixer');
+  function volumeSlider(labelText, initial) {
+    const wrapper = el('label', 'timeline-volume-control');
+    const label = el('span', '', labelText);
+    const output = el('output', '', Math.round(initial * 100) + '%');
+    const slider = el('input');
+    slider.type = 'range'; slider.min = '0'; slider.max = '200';
+    slider.step = '5'; slider.value = String(Math.round(initial * 100));
+    slider.setAttribute('aria-label', labelText);
+    slider.addEventListener('input', () => { output.textContent = slider.value + '%'; });
+    wrapper.append(label, slider, output);
+    audioMixer.append(wrapper);
+    return slider;
+  }
+  const sourceVolume = volumeSlider('Original audio',
+    Number(clip.source_volume ?? (clip.voiceover_added ? 0.18 : 1)));
+  const voiceVolume = volumeSlider('Narrator voice', Number(clip.voice_volume ?? 1));
+  form.append(audioMixer);
 
   const regenerate = el('label', 'clip-edit-consent');
   const regenerateCheck = el('input');
@@ -521,6 +704,12 @@ function buildClipEditor(job, clip) {
   voice.type = 'checkbox';
   voiceRow.append(voice, el('span', '',
     'Generate new spoken commentary with ElevenLabs (external API, may incur a charge)'));
+  voice.addEventListener('change', () => {
+    if (voice.checked && Number(sourceVolume.value) === 100) {
+      sourceVolume.value = '20';
+      sourceVolume.dispatchEvent(new Event('input'));
+    }
+  });
   const approvalRow = el('label', 'clip-edit-consent');
   const approval = el('input');
   approval.type = 'checkbox';
@@ -530,7 +719,7 @@ function buildClipEditor(job, clip) {
   voice.addEventListener('change', () => { approvalRow.hidden = !voice.checked; });
 
   const explain = el('p', 'helper-note',
-    'Edits use the original video. A new MP4 is rendered; earlier versions stay available. Narration is off by default to avoid unexpected API charges.');
+    'Edits use the original source and create a new version. Scene text changes need new voice generation to be heard; narrator charges require approval. Trim changes cannot reuse scene-specific text.');
   const actions = el('div', 'clip-edit-actions');
   const save = el('button', 'small-action primary-action', 'Render revised clip');
   save.type = 'submit';
@@ -547,8 +736,15 @@ function buildClipEditor(job, clip) {
         begin + span > Number(job.duration || 0) + 0.05)
       return notify('Trim needs to fit within the original video (3–120 seconds).');
     if (voice.checked && (!approval.checked ||
-        (!script.value.trim() && !regenerateCheck.checked)))
+        (!script.value.trim() && !regenerateCheck.checked && !beatEditors.some(b => b.text.value.trim()))))
       return notify('Approve ElevenLabs usage and enter a script or enable video analysis.');
+    const useBeatOverrides = beatEditors.length && !regenerateCheck.checked &&
+      (beatsChanged || voice.checked);
+    if (beatsChanged && regenerateCheck.checked)
+      return notify('Choose your manually edited scene text or AI regeneration, not both.');
+    if (useBeatOverrides && (Math.abs(begin - Number(clip.start)) > 0.05 ||
+        Math.abs(span - Number(clip.duration)) > 0.05))
+      return notify('Scene text is tied to the old timing. Keep the original trim or regenerate narration.');
     const settings = {
       start: begin, duration: span, title: title.value.trim(),
       effect: effect.value, framing: framing.value,
@@ -556,6 +752,11 @@ function buildClipEditor(job, clip) {
         job.options.split_boxes,
       caption_style: captions.value, hook_style: hook.value,
       script: script.value.trim(), voiceover: voice.checked,
+      manual_beats: useBeatOverrides ? beatEditors.map(b => ({
+        start: b.start, end: b.end, text: b.text.value.trim()
+      })) : [],
+      source_volume: Number(sourceVolume.value) / 100,
+      voice_volume: Number(voiceVolume.value) / 100,
       brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
       narration_basis: basis.value,

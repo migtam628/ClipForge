@@ -238,6 +238,28 @@ provider-exact word alignment. Generation may be slow on CPU-only servers,
 especially with several clips and visual frames. Preserve the original
 footage and only clip videos you are authorized to use.
 
+### Timeline editor (first release)
+
+In **Library → Open timeline editor**, expand the editing workspace to review
+the original source on a scrub-able monitor, adjust in/out points, and inspect
+separate video, audio and narration scene lanes. You can correct each timed
+narration line before exporting and independently adjust the original-audio
+and narrator-audio levels (0–200%). A new render is versioned; previous MP4s
+remain downloadable. Source previews use HTTP range requests and remain scoped
+to completed local jobs. Edited narration is **not** voiced unless you
+explicitly opt in to ElevenLabs and approve possible charges; changing trim
+points requires regenerating or discarding the old scene-specific text.
+
+For 14–17-second shorts, the narrator now analyzes at least three video
+windows to reduce missed transitions, with a more natural word budget of about
+2.1 words per second when evidence supports it. This is a pacing target, not a
+license to fabricate details or repeat unsupported claims.
+
+This first editor release has one source video track and no destructive cuts.
+Multi-source drag-and-drop arranging, split/merge, transition effects, B-roll,
+music tracks, keyframes, waveform editing, and export-to-Premiere XML remain
+planned work, **not** shipped features.
+
 ## Creator-directed clip discovery and publishing drafts (v0.10)
 
 The **AI editor** now accepts a bounded, explicit instruction such as "Find

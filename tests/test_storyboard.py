@@ -42,6 +42,35 @@ def test_windows_span_entire_clip():
         storyboard.time_windows(121)
 
 
+def test_fifteen_second_short_samples_three_scenes_with_fuller_word_budget(
+        tmp_path, monkeypatch):
+    windows = storyboard.time_windows(15)
+    assert [(w["start"], w["end"]) for w in windows] == [
+        (0, 5), (5, 10), (10, 15),
+    ]
+    requested = []
+
+    def reply(payload, **_kwargs):
+        samples = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        requested.extend(samples)
+        return json.dumps({"beats": [
+            {"id": w["id"], "text": "Visible scene in the source video."}
+            for w in samples
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", reply)
+    transcript = [
+        {"start": i * 5, "end": (i + 1) * 5, "text": f"Spoken scene {i}"}
+        for i in range(3)
+    ]
+    result = storyboard.build_storyboard(
+        transcript, 0, 15, "documentary", "en", tmp_path / "story.json",
+    )
+    assert len(result["beats"]) == 3
+    assert len(requested) == 3
+    assert all(sample["max_words"] >= 10 for sample in requested)
+
+
 def test_video_storyboard_samples_each_window_and_saves_timestamps(tmp_path, monkeypatch):
     source = tmp_path / "source.mp4"
     source.write_bytes(b"fixture")

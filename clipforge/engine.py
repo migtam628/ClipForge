@@ -164,7 +164,13 @@ def render_clip(
     hook: Path | None = None, smart_track: Path | None = None,
     brand: Path | None = None,
     split_boxes: list[dict[str, float]] | None = None,
+    source_volume: float | None = None, voice_volume: float = 1.0,
 ) -> None:
+    if source_volume is None:
+        source_volume = 0.18 if voiceover is not None else 1.0
+    if not all(math.isfinite(v) and 0 <= v <= 2
+               for v in (source_volume, voice_volume)):
+        raise ValueError("Audio volumes must be finite values between 0 and 2")
     size = {"9:16": (720, 1280), "16:9": (1280, 720), "1:1": (720, 720)}[ratio]
     w, h = size
     if framing == "split":
@@ -254,16 +260,18 @@ def render_clip(
         # FFmpeg -t truncates the final output to the clip length.
         if has_source_audio:
             audio_filter = (
-                "[0:a:0]volume=0.18,asetpts=PTS-STARTPTS[bed];"
-                "[1:a:0]asetpts=PTS-STARTPTS[voice];"
+                f"[0:a:0]volume={source_volume:.3f},asetpts=PTS-STARTPTS[bed];"
+                f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[voice];"
                 "[bed][voice]amix=inputs=2:duration=longest:"
                 "dropout_transition=0:normalize=0[aout]"
             )
         else:
-            audio_filter = "[1:a:0]asetpts=PTS-STARTPTS[aout]"
+            audio_filter = f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[aout]"
         args += ["-filter_complex", audio_filter, "-map", "[aout]"]
     else:
         args += ["-map", "0:a:0?"]
+        if has_source_audio and source_volume != 1.0:
+            args += ["-af", f"volume={source_volume:.3f}"]
     try:
         threads = max(1, min(8, int(os.environ.get("CLIPFORGE_FFMPEG_THREADS", "2"))))
     except ValueError:

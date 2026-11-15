@@ -5,9 +5,11 @@ import subprocess
 import time
 import zipfile
 
+import pytest
 from fastapi.testclient import TestClient
 
 from clipforge import app as module
+from clipforge import engine
 from clipforge.captions import write_hook
 from clipforge.engine import render_clip
 
@@ -92,6 +94,106 @@ def test_editing_job_keeps_prior_clip_and_regenerates_zip(tmp_path, monkeypatch)
         assert archive.namelist() == ["clip-001-v01.mp4"]
 
 
+def test_timeline_source_preview_is_scoped_to_completed_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    response = client.get(f"/api/jobs/{job_id}/source")
+    assert response.status_code == 200
+    assert response.content == b"original-video"
+    assert response.headers["content-type"].startswith("video/mp4")
+    partial = client.get(f"/api/jobs/{job_id}/source",
+                         headers={"Range": "bytes=0-7"})
+    assert partial.status_code == 206
+    assert partial.content == b"original"
+    module._patch(folder, status="failed")
+    assert client.get(f"/api/jobs/{job_id}/source").status_code == 409
+
+
+def test_timeline_rejects_mismatched_manual_scene_timing(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    job = module._read(folder)
+    job["clips"][0]["storyboard"] = [
+        {"start": 0, "end": 10, "text": "Original first scene"},
+        {"start": 10, "end": 20, "text": "Original second scene"},
+    ]
+    module._write(folder, job)
+    endpoint = f"/api/jobs/{job_id}/clips/1/edit"
+    beats = [
+        {"start": 0, "end": 10, "text": "Carefully reviewed first scene"},
+        {"start": 10, "end": 20, "text": "Carefully reviewed second scene"},
+    ]
+    assert client.post(endpoint, json={
+        "start": 5, "duration": 20, "manual_beats": beats,
+        "regenerate_storyboard": True,
+    }).status_code == 422
+    assert client.post(endpoint, json={
+        "start": 6, "duration": 20, "manual_beats": beats,
+    }).status_code == 422
+    assert client.post(endpoint, json={
+        "start": 5, "duration": 20,
+        "manual_beats": [{**beats[0], "end": 9}, beats[1]],
+    }).status_code == 422
+    assert client.post(endpoint, json={
+        "start": 5, "duration": 20,
+        "manual_beats": [{**beats[0], "text": "word " * 30}, beats[1]],
+    }).status_code == 422
+    assert client.post(endpoint, json={
+        "start": 5, "duration": 20, "manual_beats": beats,
+        "source_volume": 3,
+    }).status_code == 422
+    assert client.post(endpoint, json={
+        "start": 5, "duration": 20, "manual_beats": beats,
+        "voiceover": True,
+    }).status_code == 400
+
+
+def test_timeline_manual_beats_render_as_reviewed_script(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    job = module._read(folder)
+    job["clips"][0]["storyboard"] = [
+        {"start": 0, "end": 10, "text": "First scene"},
+        {"start": 10, "end": 20, "text": "Second scene"},
+    ]
+    module._write(folder, job)
+    rendered = []
+
+    def fake_render(_source, destination, *_args, **kwargs):
+        rendered.append(kwargs)
+        destination.write_bytes(b"rendered" * 300)
+
+    monkeypatch.setattr(module, "probe", lambda *_: {"duration": 60, "has_audio": False})
+    monkeypatch.setattr(module, "render_clip", fake_render)
+    monkeypatch.setattr(module, "render_thumbnail", lambda *_: None)
+    response = client.post(f"/api/jobs/{job_id}/clips/1/edit", json={
+        "start": 5, "duration": 20, "caption_style": "none",
+        "manual_beats": [
+            {"start": 0, "end": 10, "text": "A large transport vehicle is visible."},
+            {"start": 10, "end": 20, "text": "A uniformed speaker appears on screen."},
+        ],
+        "source_volume": 0.55, "voice_volume": 1.2,
+    })
+    assert response.status_code == 202, response.text
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        result = module._read(folder)["clips"][0]
+        if result.get("revision_state") in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    assert result["revision_state"] == "completed", result.get("revision_error")
+    assert result["analysis_basis"] == "manual_review"
+    assert result["script"] == (
+        "A large transport vehicle is visible. "
+        "A uniformed speaker appears on screen."
+    )
+    assert len(result["storyboard"]) == 2
+    assert result["source_volume"] == 0.55
+    assert rendered[0]["source_volume"] == 0.55
+    assert rendered[0]["voice_volume"] == 1.2
+    assert not result["voiceover_added"]
+
+
 def test_revision_validations_no_paid_tts_without_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     job_id, folder = _completed_job(tmp_path)
@@ -154,6 +256,27 @@ def test_real_ffmpeg_hook_overlay(tmp_path):
     render_clip(source, out, 0, 2, "9:16", hook=hook)
     assert out.stat().st_size > 400
     assert 1.5 < float(module.probe(out)["duration"]) < 2.5
+
+
+def test_render_clip_audio_mixer_uses_validated_levels(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(engine.subprocess, "run", lambda args, **kwargs:
+                        commands.append(args))
+    source = tmp_path / "input.mp4"
+    dest = tmp_path / "result.mp4"
+    engine.render_clip(source, dest, 0, 3, "9:16", source_volume=0.45)
+    assert commands[-1][commands[-1].index("-af") + 1] == "volume=0.450"
+    engine.render_clip(source, dest, 0, 3, "9:16",
+                       voiceover=tmp_path / "voice.mp3", source_volume=0.15,
+                       voice_volume=1.25)
+    mixer = commands[-1][commands[-1].index("-filter_complex") + 1]
+    assert "[0:a:0]volume=0.150" in mixer
+    assert "[1:a:0]volume=1.250" in mixer
+    engine.render_clip(source, dest, 0, 3, "9:16", voiceover=tmp_path / "voice.mp3")
+    default_mixer = commands[-1][commands[-1].index("-filter_complex") + 1]
+    assert "[0:a:0]volume=0.180" in default_mixer
+    with pytest.raises(ValueError, match="Audio volumes"):
+        engine.render_clip(source, dest, 0, 3, "9:16", source_volume=float("nan"))
 
 
 def test_editor_is_in_library_and_studio_contains_hook_controls():

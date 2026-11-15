@@ -136,6 +136,10 @@ def time_windows(duration: float) -> list[dict]:
     if not 3 <= duration <= 120 or not math.isfinite(duration):
         raise ValueError("Narration requires a clip length of 3 to 120 seconds")
     count = max(2, min(8, math.ceil(duration / 8)))
+    # Fifteen-second shorts often have three distinct visual sections; two
+    # 7.5-second samples miss the middle scene altogether.
+    if 14 <= duration < 17:
+        count = max(3, count)
     return [{
         "id": i,
         "start": round(i * duration / count, 2),
@@ -250,7 +254,12 @@ def _timed_script_batch(model: str, windows: list[dict], style: str,
         "Use ONLY the visible frame observations and spoken words in that "
         "same window. Do not invent movement, dialogue, identities, motives, "
         "history or outcomes. If evidence is absent, use an empty text. "
-        "No generic introductions, repetition, hashtags, emoji or quotes. "
+        "Describe concrete subjects or actions actually supported by that "
+        "window's evidence, not generic commentary. If something is only a "
+        "claim in the source speech, attribute it as a claim; do not assert "
+        "it as verified fact. Aim to use most of the available max_words "
+        "without padding or speculation. No generic introductions, "
+        "repetition, hashtags, emoji or quotes. "
         f"Write in {LANGUAGES[language]}, {style} style. "
         "Keep every text within its max_words limit. "
         'Return JSON only: {"beats":[{"id":0,"text":"..."}]}. Evidence: '
@@ -344,9 +353,10 @@ def build_storyboard(
                         len(windows))
         evidence.append({
             **entry, "speech": speech, "frame_observation": visual,
-            # ~1.5 spoken words per second leaves room for breath and pauses.
+            # About 2.1 spoken words/second fits conversational narration.
+            # Previous 1.35/sec produced only ~20 words for an entire 15s short.
             "max_words": max(3, min(24, int(
-                (entry["end"] - entry["start"]) * 1.35
+                (entry["end"] - entry["start"]) * 2.1
             ))),
         })
     if not any(w["speech"] or w["frame_observation"] for w in evidence):
