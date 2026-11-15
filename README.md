@@ -218,12 +218,17 @@ resuming a job that is still processing.
 
 **Timed script reliability:** The language model writes at most two windows
 per request using a JSON schema and checks that every returned ID matches the
-requested window. A malformed or truncated two-window reply is retried as
-individual windows; if that also fails, the job stops without inventing a
-script. Valid text drafts are saved separately from frame descriptions so a
-resumed job can continue without repeating earlier visual analysis or valid
-narration beats. Follow `Timed narration script ready: windows N-M/T` in the
-container logs. No source text or raw model output is included in error logs.
+requested window. A malformed, truncated, or timed-out two-window reply is
+retried as individual windows. Each valid beat is saved immediately; a
+persistent timeout identifies the failed window and stops rather than
+inventing a script. Script requests use bounded attempts so a slow two-window
+request does not repeat a full timeout three times before individual recovery.
+Valid text drafts are saved separately from frame descriptions so a resumed
+job can continue without repeating earlier visual analysis or valid narration
+beats. Follow `Timed narration script ready: windows N-M/T` in the container
+logs. No source text or raw model output is included in error logs. If even
+individual windows repeatedly time out, check Ollama CPU/RAM utilization and
+the configured `CLIPFORGE_AI_TIMEOUT` before resuming.
 
 **Limitations:** This is a still-frame sampler, not motion recognition or
 continuous shot-by-shot video understanding. It can miss quick events or

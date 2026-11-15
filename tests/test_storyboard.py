@@ -112,7 +112,8 @@ def test_non_evidenced_windows_are_silent(tmp_path, monkeypatch):
 
 
 def test_storyboard_rejects_malformed_ai_timeline(tmp_path, monkeypatch):
-    monkeypatch.setattr(storyboard, "_ollama", lambda *_: '{"beats":[{"id":0,"text":"a"}]}')
+    monkeypatch.setattr(storyboard, "_ollama", lambda *_args, **_kwargs:
+                        '{"beats":[{"id":0,"text":"a"}]}')
     with pytest.raises(RuntimeError, match="could not return valid timed narration"):
         storyboard.build_storyboard(
             evidence(), 0, 30, "casual", "en", tmp_path / "bad.json",
@@ -141,6 +142,65 @@ def test_truncated_timed_script_pair_falls_back_to_individual_beats(tmp_path, mo
     assert len(output["beats"]) == 4
     assert all(beat["text"] for beat in output["beats"])
     assert calls == [[0, 1], [0], [1], [2, 3]]
+
+
+def test_timed_script_pair_timeout_recovers_with_individual_beats(tmp_path, monkeypatch):
+    calls = []
+
+    def respond(payload, **kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        ids = [item["id"] for item in batch]
+        calls.append((ids, kwargs.get("max_attempts")))
+        if ids == [0, 1]:
+            raise RuntimeError("Local Ollama narration analysis unavailable: timed out")
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "Scene-grounded narration."} for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", respond)
+    result = storyboard.build_storyboard(
+        evidence(), 0, 30, "documentary", "en", tmp_path / "scene.json",
+    )
+    assert len(result["beats"]) == 4
+    assert all(beat["text"] for beat in result["beats"])
+    assert calls == [([0, 1], 1), ([0], 2), ([1], 2), ([2, 3], 1)]
+
+
+def test_timed_script_timeout_checkpoints_partial_single_beats(tmp_path, monkeypatch):
+    checkpoint = tmp_path / "scene.json"
+    first_calls = []
+
+    def intermittent(payload, **_kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        ids = [item["id"] for item in batch]
+        first_calls.append(ids)
+        if ids == [2, 3] or ids == [3]:
+            raise RuntimeError("Local Ollama narration analysis unavailable: timed out")
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "Verified speech only."} for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", intermittent)
+    with pytest.raises(RuntimeError, match=r"timed out.*window 4/4.*Resume job"):
+        storyboard.build_storyboard(evidence(), 0, 30, "casual", "en", checkpoint)
+    saved = json.loads((tmp_path / "scene-draft.json").read_text())
+    assert sorted(saved["texts"]) == ["0", "1", "2"]
+    assert first_calls == [[0, 1], [2, 3], [2], [3]]
+
+    remaining = []
+
+    def resume(payload, **_kwargs):
+        batch = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        remaining.append([item["id"] for item in batch])
+        return json.dumps({"beats": [
+            {"id": item["id"], "text": "Recovered without redoing earlier beats."}
+            for item in batch
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", resume)
+    completed = storyboard.build_storyboard(evidence(), 0, 30, "casual", "en", checkpoint)
+    assert len(completed["beats"]) == 4
+    assert remaining == [[3]]
 
 
 def test_timed_script_drafts_survive_failure_without_regeneration(tmp_path, monkeypatch):
