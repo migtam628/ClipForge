@@ -132,3 +132,22 @@ def test_publishing_schedule_controls_visible():
     assert "Approve and schedule uploads" in js
     assert "savePreset" in js
     assert "duplicate_checked: true" in js
+
+
+def test_dedicated_posting_settings_manage_presets_without_deleting_posts(tmp_path, monkeypatch):
+    job_id, folder = _completed(tmp_path, monkeypatch)
+    assert _schedule(job_id).status_code == 202
+    page = client.get("/posting-settings")
+    assert page.status_code == 200
+    assert 'id="view-posting-settings"' in page.text
+    assert 'id="posting-preset-form"' in page.text
+    assert 'href="/posting-settings"' in page.text
+    assert client.put("/api/publishing/presets", json={
+        "name": "SignalLoom Sports", "platforms": ["youtube", "tiktok"],
+        "description": "#sports", "visibility": "private",
+    }).status_code == 200
+    assert client.delete("/api/publishing/presets/SignalLoom%20Sports").status_code == 204
+    assert client.get("/api/publishing/presets").json() == []
+    assert client.delete("/api/publishing/presets/SignalLoom%20Sports").status_code == 404
+    assert len(client.get("/api/publishing/queue").json()) == 2
+    assert len(module._read(folder)["publications"]) == 2

@@ -22,6 +22,7 @@
       <a class="nav-link" data-page="studio" href="/studio"><span class="nav-icon">▦</span><span>Studio</span></a>
       <a class="nav-link" data-page="library" href="/library"><span class="nav-icon">▤</span><span>Clip Library</span></a>
       <a class="nav-link" data-page="publishing" href="/publishing"><span class="nav-icon">↗</span><span>Publishing</span></a>
+      <a class="nav-link" data-page="posting-settings" href="/posting-settings"><span class="nav-icon">⚑</span><span>Posting settings</span></a>
       <a class="nav-link" data-page="analytics" href="/analytics"><span class="nav-icon">◫</span><span>Analytics</span></a>
       <a class="nav-link" data-page="activity" href="/activity"><span class="nav-icon">◷</span><span>Activity</span></a>
     </nav>
@@ -80,7 +81,7 @@
               <div class="framing-card">
                 <div class="framing-card-head"><strong>Original footage</strong><span id="framing-source-label">Select a file for live preview</span></div>
                 <div class="framing-stage" id="framing-stage">
-                  <video id="framing-source" playsinline muted loop preload="metadata" aria-label="Original video preview" hidden></video>
+                  <video id="framing-source" playsinline muted loop controls preload="metadata" aria-label="Original video preview and playback controls" hidden></video>
                   <iframe id="framing-embed" title="YouTube source preview" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen hidden></iframe>
                   <div class="framing-empty" id="framing-empty">File previews appear here. For video links, framing is applied to the downloaded source during rendering.</div>
                   <div class="split-selection" id="split-selection" hidden>
@@ -92,6 +93,7 @@
                 <div class="split-controls" id="split-controls" hidden>
                   <label for="split-zoom-0">Top person · zoom <input type="range" id="split-zoom-0" min="25" max="100" value="36" step="1"></label>
                   <label for="split-zoom-1">Bottom person · zoom <input type="range" id="split-zoom-1" min="25" max="100" value="36" step="1"></label>
+                  <label for="split-ratio">Panel sizes · <span id="split-ratio-value">50% top / 50% bottom</span><input type="range" id="split-ratio" min="30" max="70" value="50" step="5"></label>
                   <button type="button" class="small-action" id="split-reset">Reset positions</button>
                 </div>
               </div>
@@ -102,6 +104,19 @@
                   <div class="portrait-pane"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-b" alt="Still thumbnail crop guide for the second pane" hidden><span class="portrait-placeholder">Framing preview</span></div>
                 </div>
                 <p class="helper-note" id="portrait-preview-note">Local file previews use your source. Final exports use full-resolution FFmpeg rendering.</p>
+              </div>
+              <div class="framing-card framing-presets" id="framing-presets" hidden>
+                <div class="framing-card-head"><strong>Split layouts</strong><span>Rendered presets</span></div>
+                <p class="helper-note">Choose a starting layout, then drag each crop box to keep the right people in frame.</p>
+                <div class="split-preset-grid" role="group" aria-label="Two-person split layouts">
+                  <button type="button" class="split-preset is-chosen" data-split-preset="balanced" aria-pressed="true"><span class="split-preset-icon" style="--top:50%"><i></i><i></i></span><span>Equal split</span></button>
+                  <button type="button" class="split-preset" data-split-preset="top-focus" aria-pressed="false"><span class="split-preset-icon" style="--top:65%"><i></i><i></i></span><span>Top focus</span></button>
+                  <button type="button" class="split-preset" data-split-preset="bottom-focus" aria-pressed="false"><span class="split-preset-icon" style="--top:35%"><i></i><i></i></span><span>Bottom focus</span></button>
+                  <button type="button" class="split-preset" data-split-preset="tight" aria-pressed="false"><span class="split-preset-icon is-tight" style="--top:50%"><i></i><i></i></span><span>Tight faces</span></button>
+                  <button type="button" class="split-preset" data-split-preset="wide" aria-pressed="false"><span class="split-preset-icon is-wide" style="--top:50%"><i></i><i></i></span><span>Wide scene</span></button>
+                  <button type="button" class="split-preset" data-split-preset="swap" aria-pressed="false"><span class="split-preset-icon is-swap" style="--top:50%"><i></i><i></i></span><span>Swap order</span></button>
+                </div>
+                <p class="helper-note" id="split-layout-status" role="status">Equal split · 50% / 50%</p>
               </div>
             </div>
             <div class="framing-extra"><label for="framing">Render mode</label><select id="framing"><option value="smart" selected>Smart · follow faces</option><option value="split">Split in two · manual positions</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
@@ -182,11 +197,33 @@
       </section>
 
       <section id="view-publishing" class="page-view" hidden>
-        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION CENTER</div><h1>Publish with <span>control.</span></h1><p class="lede">Review a clip, send immediately with approval, or explicitly schedule one or more configured platforms. TikTok receives a draft for final review.</p></div><a class="small-action" href="/settings">⚙ Connections &amp; setup</a></div>
+        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION CENTER</div><h1>Publish with <span>control.</span></h1><p class="lede">Review a clip, send immediately with approval, or explicitly schedule one or more configured platforms. TikTok receives a draft for final review.</p></div><a class="small-action" href="/posting-settings">⚙ Posting settings</a></div>
         <div id="platform-connections" class="connection-grid"></div>
         <div class="section-toolbar"><strong id="publishing-scheduled-count">Loading scheduled transfers…</strong><span>Scheduled transfers survive server restarts.</span></div>
         <div class="section-toolbar"><span>Ready to review &amp; share</span><button class="refresh" type="button" data-refresh>↻ Refresh</button></div>
         <div id="jobs-publishing" class="jobs"></div>
+      </section>
+
+      <section id="view-posting-settings" class="page-view" hidden>
+        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION PREFERENCES</div><h1>Posting <span>settings.</span></h1><p class="lede">Manage social platform targets, channel-ready templates and visibility separately from editing preferences. Saved presets are available when publishing and scheduling clips.</p></div><a class="small-action" href="/publishing">↗ Go to Publishing</a></div>
+        <div class="section-toolbar"><strong>Platform connections</strong><span>Credentials remain on the private server; they never appear here.</span></div>
+        <div id="posting-platform-connections" class="connection-grid" aria-live="polite"></div>
+        <div class="posting-settings-grid">
+          <section class="settings-card">
+            <h2>Reusable posting preset</h2>
+            <p>Choose destinations and default post copy. Presets are saved on the server and apply only when you select one; publishing always requires approval.</p>
+            <form id="posting-preset-form" class="settings-form">
+              <div class="field"><label for="posting-preset-name">Preset / channel name</label><input id="posting-preset-name" maxlength="50" required placeholder="e.g. SignalLoom Sports"></div>
+              <fieldset class="posting-platform-fieldset"><legend>Publish to</legend><div id="posting-preset-platforms" class="posting-platform-checks"></div></fieldset>
+              <div class="field"><label for="posting-preset-visibility">YouTube default visibility</label><select id="posting-preset-visibility"><option value="private">Private</option><option value="unlisted">Unlisted</option><option value="public">Public</option></select></div>
+              <div class="field posting-description-field"><label for="posting-preset-description">Description / hashtags template</label><textarea id="posting-preset-description" rows="4" maxlength="2200" placeholder="Add your channel voice, links and hashtags..."></textarea></div>
+              <p class="helper-note">TikTok currently uses inbox drafts, so public posting must be completed in TikTok. Supported platforms are shown below even when credentials are not configured.</p>
+              <div class="settings-actions"><button class="create-button" type="submit">Save posting preset</button><button class="small-action" id="posting-preset-clear" type="button">Clear form</button></div>
+              <p id="posting-preset-feedback" role="status" class="helper-note" aria-live="polite"></p>
+            </form>
+          </section>
+          <section class="settings-card"><h2>Your posting presets</h2><p>Select a saved preset to update or remove it. Up to 10 presets are supported.</p><div id="posting-preset-list" class="posting-preset-list" aria-live="polite"></div><p class="helper-note">Manage API keys and token configuration in <a href="/settings">System Settings</a>. Posting credentials are never stored in a preset.</p></section>
+        </div>
       </section>
 
       <section id="view-activity" class="page-view" hidden>

@@ -197,6 +197,36 @@ def test_split_screen_renders_two_source_regions(tmp_path):
     assert bottom[2] > bottom[0] + 100
 
 
+def test_split_ratio_changes_rendered_panel_height(tmp_path):
+    source = tmp_path / "reaction.mp4"
+    output = tmp_path / "vertical.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "color=red:size=160x180:rate=8:duration=1",
+        "-f", "lavfi", "-i", "color=blue:size=160x180:rate=8:duration=1",
+        "-filter_complex", "[0:v][1:v]hstack=inputs=2[v]",
+        "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(source),
+    ], check=True, capture_output=True)
+    boxes = [{"x": 0, "y": 0, "width": 0.5, "height": 1},
+             {"x": 0.5, "y": 0, "width": 0.5, "height": 1}]
+    render_clip(source, output, 0, 0.75, "9:16", framing="split",
+                split_boxes=boxes, split_ratio=0.65)
+    samples = subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(output),
+        "-vf", "select=eq(n\\,0),scale=1:20:flags=neighbor,format=rgb24",
+        "-frames:v", "1", "-f", "rawvideo", "pipe:1",
+    ], check=True, capture_output=True).stdout
+    assert samples[12 * 3] > samples[12 * 3 + 2] + 100  # 60%: upper red
+    assert samples[14 * 3 + 2] > samples[14 * 3] + 100  # 70%: lower blue
+
+
+def test_split_ratio_rejects_invalid_values(tmp_path):
+    for value in (0.1, 0.8, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="Split-screen panel ratio"):
+            render_clip(tmp_path / "missing.mp4", tmp_path / "missing-output.mp4",
+                        0, 1, "9:16", framing="split", split_ratio=value)
+
+
 def test_split_render_rejects_invalid_coordinates(tmp_path):
     with pytest.raises(ValueError, match="Invalid split-screen crop box"):
         render_clip(tmp_path / "unused.mp4", tmp_path / "unused-output.mp4",

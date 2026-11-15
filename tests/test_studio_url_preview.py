@@ -32,6 +32,22 @@ def test_preview_is_explicit_and_the_existing_upload_monitor_remains():
     assert 'YouTube thumbnail crop guide only' in js
 
 
+def test_framing_presets_and_synchronized_local_preview_are_connected():
+    client = TestClient(app)
+    html = client.get('/studio').text
+    js = client.get('/assets/app.js').text
+    for preset in ('balanced', 'top-focus', 'bottom-focus', 'tight', 'wide', 'swap'):
+        assert f'data-split-preset="{preset}"' in html
+        assert f"'{preset}'" in js or f"{preset}:" in js
+    assert 'id="split-ratio"' in html
+    assert 'id="framing-source" playsinline muted loop controls' in html
+    assert 'framingMaster.addEventListener(\'seeking\'' in js
+    assert 'framingMaster.addEventListener(\'pause\'' in js
+    assert 'framingMaster.addEventListener(\'play\'' in js
+    assert 'split_ratio: splitTopRatio()' in js
+    assert 'Still YouTube thumbnail crop guide only' in js
+
+
 @pytest.mark.skipif(shutil.which('node') is None, reason='Node is not installed')
 def test_youtube_preview_url_parser_uses_only_safe_video_ids():
     source = Path(__file__).resolve().parents[1] / 'clipforge/static/preview-url.js'

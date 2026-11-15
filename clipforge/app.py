@@ -142,6 +142,7 @@ class Options(BaseModel):
     framing: Literal["pad", "crop", "smart", "blur", "split"] = "pad"
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
+    split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
     hook_style: Literal["none", "headline"] = "none"
     narration: Literal["none", "script", "narrated"] = "none"
     narration_style: Literal["energetic", "documentary", "casual"] = "energetic"
@@ -215,6 +216,7 @@ class ClipEditRequest(BaseModel):
     framing: Literal["pad", "crop", "smart", "blur", "split"] = "crop"
     split_boxes: list[SplitBox] = Field(default_factory=default_split_boxes,
                                        min_length=2, max_length=2)
+    split_ratio: float = Field(default=0.5, ge=0.3, le=0.7, allow_inf_nan=False)
     caption_style: Literal["none", "classic", "bold", "neon", "karaoke", "pop"] = "bold"
     hook_style: Literal["none", "headline"] = "headline"
     script: str = Field(default="", max_length=1200)
@@ -554,6 +556,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     has_source_audio=info["has_audio"], hook=hook_file,
                     smart_track=smart_track, brand=brand_file,
                     split_boxes=[box.model_dump() for box in opts.split_boxes],
+                    split_ratio=opts.split_ratio,
                 )
                 os.replace(partial, destination)
                 try:
@@ -566,6 +569,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "framing": opts.framing, "narration": opts.narration,
                     "split_boxes": [box.model_dump() for box in opts.split_boxes]
                     if opts.framing == "split" else [],
+                    "split_ratio": opts.split_ratio if opts.framing == "split" else 0.5,
                     "script": script, "voiceover_added": voiceover is not None,
                     "storyboard": storyboard["beats"] if storyboard else [],
                     "analysis_basis": storyboard["analysis_basis"] if storyboard else None,
@@ -662,6 +666,7 @@ def recover_interrupted_jobs() -> None:
 @app.get("/studio")
 @app.get("/library")
 @app.get("/publishing")
+@app.get("/posting-settings")
 @app.get("/activity")
 @app.get("/analytics")
 @app.get("/settings")
@@ -861,6 +866,7 @@ async def submit_upload_batch(
     effect: str = Form("none"),
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
+    split_ratio: float = Form(0.5),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -881,7 +887,7 @@ async def submit_upload_batch(
             clip_seconds=clip_seconds, max_clips=max_clips,
             aspect_ratio=aspect_ratio, selection_mode=selection_mode,
             caption_style=caption_style, effect=effect,
-            framing=framing, hook_style=hook_style,
+            framing=framing, split_ratio=split_ratio, hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -949,6 +955,7 @@ async def submit_upload(
     effect: str = Form("none"),
     framing: str = Form("pad"),
     split_boxes: str = Form(""),
+    split_ratio: float = Form(0.5),
     hook_style: str = Form("none"),
     narration: str = Form("none"),
     narration_style: str = Form("energetic"),
@@ -966,7 +973,7 @@ async def submit_upload(
         opts = Options(
             clip_seconds=clip_seconds, max_clips=max_clips, aspect_ratio=aspect_ratio,
             selection_mode=selection_mode, caption_style=caption_style,
-            effect=effect, framing=framing, hook_style=hook_style,
+            effect=effect, framing=framing, split_ratio=split_ratio, hook_style=hook_style,
             **({"split_boxes": json.loads(split_boxes)} if split_boxes else {}),
             narration=narration, narration_style=narration_style,
             narration_language=narration_language, narration_basis=narration_basis,
@@ -1292,6 +1299,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             voiceover=voiceover, has_source_audio=info["has_audio"], hook=hook_file,
             smart_track=smart_track, brand=brand_file,
             split_boxes=[box.model_dump() for box in edit.split_boxes],
+            split_ratio=edit.split_ratio,
             source_volume=edit.source_volume, voice_volume=edit.voice_volume,
             music=music, music_volume=edit.music_volume,
         )
@@ -1329,7 +1337,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 key: target.get(key) for key in (
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
-                    "split_boxes",
+                    "split_boxes", "split_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
                     "segments", "music_enabled", "music_volume",
@@ -1341,6 +1349,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 title=edit.title.strip(), effect=edit.effect, framing=edit.framing,
                 split_boxes=[box.model_dump() for box in edit.split_boxes]
                 if edit.framing == "split" else [],
+                split_ratio=edit.split_ratio if edit.framing == "split" else 0.5,
                 captions_added=subtitles is not None,
                 caption_style=edit.caption_style,
                 hook_style=edit.hook_style if hook_file else "none",
@@ -1796,6 +1805,17 @@ def upsert_publishing_preset(preset: PublishPreset):
         data.append(selected)
         save_json(DATA_DIR / "publishing-presets.json", data)
     return selected
+
+
+@app.delete("/api/publishing/presets/{name}", status_code=204)
+def delete_publishing_preset(name: str):
+    """Delete exactly one preset; publication history and queue remain intact."""
+    with LOCK:
+        data = get_publishing_presets()
+        kept = [item for item in data if item.get("name") != name]
+        if len(kept) == len(data):
+            raise HTTPException(404, "Publishing preset not found")
+        save_json(DATA_DIR / "publishing-presets.json", kept)
 
 
 @app.post("/api/jobs/{job_id}/publish", status_code=202)

@@ -7,11 +7,12 @@ let creatorProfiles = [];
 let libraryJobs = [];
 const libraryExpanded = new Set();
 let libraryInitialized = false;
-const validPages = ['studio', 'library', 'publishing', 'analytics', 'activity', 'settings'];
+const validPages = ['studio', 'library', 'publishing', 'posting-settings', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
 const labels = {studio: 'Studio', library: 'Clip Library',
-  publishing: 'Publishing', analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
+  publishing: 'Publishing', 'posting-settings': 'Posting settings',
+  analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
 $('page-crumb').textContent = labels[currentPage];
 document.title = 'ClipForge · ' + labels[currentPage];
 
@@ -48,6 +49,15 @@ $('create-button').addEventListener('click', createJob);
 let journeyStep = 0;
 let previewObjectUrl = null;
 let previewYoutube = null;
+let selectedSplitPreset = 'balanced';
+const splitPresetDefinitions = {
+  balanced: {name: 'Equal split', top: .5, width: .36, centers: [.22, .78]},
+  'top-focus': {name: 'Top focus', top: .65, width: .36, centers: [.22, .78]},
+  'bottom-focus': {name: 'Bottom focus', top: .35, width: .36, centers: [.22, .78]},
+  tight: {name: 'Tight faces', top: .5, width: .28, centers: [.22, .78]},
+  wide: {name: 'Wide scene', top: .5, width: .48, centers: [.26, .74]},
+  swap: {name: 'Swap order', top: .5, width: .36, centers: [.78, .22]}
+};
 let splitBoxes = [
   {x: 0.04, y: 0.21, width: 0.36, height: 0.58},
   {x: 0.60, y: 0.21, width: 0.36, height: 0.58}
@@ -64,6 +74,8 @@ function validateJourneySource() {
 function setJourneyStep(step) {
   if (step > 0 && !validateJourneySource()) return;
   journeyStep = clamp(step, 0, 3);
+  document.querySelector('.creator-panel').classList.toggle('is-framing', journeyStep === 1);
+  document.querySelector('.main-content').classList.toggle('is-framing-workspace', journeyStep === 1);
   document.querySelectorAll('[data-journey-panel]').forEach((panel) => {
     panel.hidden = Number(panel.dataset.journeyPanel) !== journeyStep;
   });
@@ -110,21 +122,61 @@ document.querySelectorAll('[data-journey]').forEach((button) =>
 $('journey-next').addEventListener('click', () => setJourneyStep(journeyStep + 1));
 $('journey-back').addEventListener('click', () => setJourneyStep(journeyStep - 1));
 
-function resetSplitBoxes() {
-  splitBoxes = [
-    {x: 0.04, y: 0.21, width: 0.36, height: 0.58},
-    {x: 0.60, y: 0.21, width: 0.36, height: 0.58}
-  ];
-  $('split-zoom-0').value = 36;
-  $('split-zoom-1').value = 36;
+function splitTopRatio() { return Number($('split-ratio').value) / 100; }
+
+function splitSourceRatio() {
+  const source = $('framing-source');
+  return source.videoWidth && source.videoHeight
+    ? source.videoWidth / source.videoHeight : 16 / 9;
+}
+
+function fitSplitBox(box, pane) {
+  const paneHeight = pane === 0 ? splitTopRatio() : 1 - splitTopRatio();
+  const factor = splitSourceRatio() * 1280 * paneHeight / 720;
+  const centerX = box.x + box.width / 2;
+  const centerY = box.y + box.height / 2;
+  const width = Math.min(box.width, .98, .98 / factor);
+  const height = width * factor;
+  return {
+    x: clamp(centerX - width / 2, 0, 1 - width),
+    y: clamp(centerY - height / 2, 0, 1 - height), width, height
+  };
+}
+
+function applySplitPreset(name) {
+  const preset = splitPresetDefinitions[name];
+  if (!preset) return;
+  $('split-ratio').value = String(preset.top * 100);
+  splitBoxes = preset.centers.map((x, i) => fitSplitBox({
+    x: x - preset.width / 2, y: .5 - .1, width: preset.width, height: .2
+  }, i));
+  for (const i of [0, 1]) $(`split-zoom-${i}`).value = Math.round(splitBoxes[i].width * 100);
+  selectedSplitPreset = name;
   renderFraming();
 }
+
+function resetSplitBoxes() { applySplitPreset('balanced'); }
+
+function markSplitCustom() { selectedSplitPreset = null; }
 
 function renderFraming() {
   const split = $('framing').value === 'split';
   $('split-selection').hidden = !split;
   $('split-controls').hidden = !split;
+  $('framing-presets').hidden = !split;
+  $('framing-workbench').classList.toggle('has-presets', split);
   $('portrait-preview').classList.toggle('is-split', split);
+  const topRatio = splitTopRatio();
+  document.querySelectorAll('.portrait-pane').forEach((pane, i) => {
+    pane.style.flex = `${i === 0 ? topRatio : 1 - topRatio} 1 0%`;
+  });
+  $('split-ratio-value').textContent = `${Math.round(topRatio * 100)}% top / ${Math.round((1 - topRatio) * 100)}% bottom`;
+  for (const button of document.querySelectorAll('[data-split-preset]')) {
+    const chosen = button.dataset.splitPreset === selectedSplitPreset;
+    button.classList.toggle('is-chosen', chosen);
+    button.setAttribute('aria-pressed', String(chosen));
+  }
+  $('split-layout-status').textContent = `${splitPresetDefinitions[selectedSplitPreset]?.name || 'Custom layout'} · ${Math.round(topRatio * 100)}% top / ${Math.round((1 - topRatio) * 100)}% bottom`;
   document.querySelectorAll('[data-framing]').forEach((button) => {
     button.classList.toggle('is-chosen', button.dataset.framing === $('framing').value);
     button.setAttribute('aria-pressed', String(button.dataset.framing === $('framing').value));
@@ -209,7 +261,6 @@ function loadSourcePreview() {
     if (previewObjectUrl) {
       video.src = previewObjectUrl;
       video.load();
-      video.play().catch(() => {});
     }
   }
   for (const suffix of ['a', 'b']) {
@@ -235,7 +286,9 @@ function loadSourcePreview() {
     : 'Select a file or load a supported YouTube link';
   $('portrait-preview-note').textContent = urlPreview
     ? 'Still YouTube thumbnail crop guide only, not a synchronized video preview. Final framing uses downloaded footage; verify it in the Library timeline.'
-    : 'Local file previews use your source. Final exports use full-resolution FFmpeg rendering.';
+    : previewObjectUrl
+      ? 'Use the original video controls to play, pause or scrub. Both vertical panes follow the same time. FFmpeg renders the selected ratio and boxes on export.'
+      : 'Choose a local video for synchronized playback. Final exports use full-resolution FFmpeg rendering.';
   $('framing-stage').style.aspectRatio = '16 / 9';
   renderFraming();
 }
@@ -255,8 +308,43 @@ $('framing-source').addEventListener('loadedmetadata', () => {
   const source = $('framing-source');
   if (source.videoWidth && source.videoHeight) {
     $('framing-stage').style.aspectRatio = `${source.videoWidth} / ${source.videoHeight}`;
+    splitBoxes = splitBoxes.map((box, i) => fitSplitBox(box, i));
+    for (const i of [0, 1]) $(`split-zoom-${i}`).value = Math.round(splitBoxes[i].width * 100);
+    renderFraming();
   }
 });
+
+// One transport for all three local preview videos. The source player owns
+// play/pause and scrubbing, while silent portrait views follow its timecode.
+const framingMaster = $('framing-source');
+const framingFollowers = [$('portrait-video-a'), $('portrait-video-b')];
+function syncFramingFollowers(force = false) {
+  if (!previewObjectUrl) return;
+  for (const follower of framingFollowers) {
+    if (follower.readyState < HTMLMediaElement.HAVE_METADATA) continue;
+    if (force || Math.abs(follower.currentTime - framingMaster.currentTime) > .16) {
+      follower.currentTime = framingMaster.currentTime;
+    }
+    follower.playbackRate = framingMaster.playbackRate;
+  }
+}
+framingMaster.addEventListener('play', () => {
+  syncFramingFollowers(true);
+  for (const follower of framingFollowers) follower.play().catch(() => {});
+});
+framingMaster.addEventListener('pause', () => {
+  for (const follower of framingFollowers) follower.pause();
+  syncFramingFollowers(true);
+});
+framingMaster.addEventListener('seeking', () => syncFramingFollowers(true));
+framingMaster.addEventListener('timeupdate', () => syncFramingFollowers());
+framingMaster.addEventListener('ratechange', () => syncFramingFollowers());
+for (const follower of framingFollowers) {
+  follower.addEventListener('loadedmetadata', () => {
+    syncFramingFollowers(true);
+    if (!framingMaster.paused) follower.play().catch(() => {});
+  });
+}
 
 document.querySelectorAll('[data-framing]').forEach((button) =>
   button.addEventListener('click', () => { $('framing').value = button.dataset.framing;
@@ -275,6 +363,15 @@ $('aspect-ratio').addEventListener('change', () => {
   renderFraming();
 });
 $('split-reset').addEventListener('click', resetSplitBoxes);
+for (const button of document.querySelectorAll('[data-split-preset]')) {
+  button.addEventListener('click', () => applySplitPreset(button.dataset.splitPreset));
+}
+$('split-ratio').addEventListener('input', () => {
+  splitBoxes = splitBoxes.map((box, i) => fitSplitBox(box, i));
+  for (const i of [0, 1]) $(`split-zoom-${i}`).value = Math.round(splitBoxes[i].width * 100);
+  markSplitCustom();
+  renderFraming();
+});
 
 for (const i of [0, 1]) {
   const button = document.querySelector(`[data-crop="${i}"]`);
@@ -291,6 +388,7 @@ for (const i of [0, 1]) {
     box.x = clamp(box.x + (event.clientX - point.x) / stage.width, 0, 1 - box.width);
     box.y = clamp(box.y + (event.clientY - point.y) / stage.height, 0, 1 - box.height);
     point = {x: event.clientX, y: event.clientY};
+    markSplitCustom();
     renderFraming();
   });
   const stop = () => { point = null; };
@@ -304,19 +402,18 @@ for (const i of [0, 1]) {
     event.preventDefault();
     splitBoxes[i].x = clamp(splitBoxes[i].x + delta[0], 0, 1 - splitBoxes[i].width);
     splitBoxes[i].y = clamp(splitBoxes[i].y + delta[1], 0, 1 - splitBoxes[i].height);
+    markSplitCustom();
     renderFraming();
   });
   $(`split-zoom-${i}`).addEventListener('input', (event) => {
     const box = splitBoxes[i];
-    const source = $('framing-source');
-    const ratio = source.videoWidth && source.videoHeight
-      ? source.videoWidth / source.videoHeight : 16 / 9;
     const w = Number(event.target.value) / 100;
-    const h = Math.min(1, w * ratio / (720 / 640));
     const cx = box.x + box.width / 2;
     const cy = box.y + box.height / 2;
-    Object.assign(box, {width: w, height: h,
-      x: clamp(cx - w / 2, 0, 1 - w), y: clamp(cy - h / 2, 0, 1 - h)});
+    const updated = fitSplitBox({x: cx - w / 2, y: cy - box.height / 2,
+      width: w, height: box.height}, i);
+    Object.assign(box, updated);
+    markSplitCustom();
     renderFraming();
   });
 }
@@ -333,7 +430,7 @@ document.querySelectorAll('[data-caption]').forEach((button) =>
     $('caption-style').dispatchEvent(new Event('change'));
   }));
 $('caption-style').dispatchEvent(new Event('change'));
-renderFraming();
+applySplitPreset('balanced');
 $('save-creator-profile').addEventListener('click', saveCreatorProfile);
 $('creator-profile-select').addEventListener('change', applyCreatorProfile);
 for (const button of document.querySelectorAll('[data-refresh]')) {
@@ -419,6 +516,7 @@ async function createJob() {
     effect: $('effect').value,
     framing: $('framing').value,
     split_boxes: splitBoxes.map((box) => ({...box})),
+    split_ratio: splitTopRatio(),
     hook_style: $('hook-style').value,
     narration: $('narration').value,
     narration_style: $('narration-style').value,
@@ -1058,6 +1156,7 @@ function buildClipEditor(job, clip) {
       effect: effect.value, framing: framing.value,
       split_boxes: clip.split_boxes?.length === 2 ? clip.split_boxes :
         job.options.split_boxes,
+      split_ratio: clip.split_ratio ?? job.options.split_ratio ?? 0.5,
       caption_style: captions.value, hook_style: hook.value,
       script: cutsActive ? '' : script.value.trim(), voiceover: voice.checked,
       manual_beats: useBeatOverrides ? beatEditors.map(b => ({
@@ -1907,8 +2006,118 @@ async function savePreferences(event) {
   } catch (err) { notify(err.message); }
 }
 
+function clearPostingPresetForm() {
+  $('posting-preset-form').reset();
+  $('posting-preset-feedback').textContent = '';
+}
+
+function editPostingPreset(preset) {
+  $('posting-preset-name').value = preset.name;
+  $('posting-preset-visibility').value = preset.visibility || 'private';
+  $('posting-preset-description').value = preset.description || '';
+  for (const input of $('posting-preset-platforms').querySelectorAll('input')) {
+    input.checked = preset.platforms.includes(input.value);
+  }
+  $('posting-preset-feedback').textContent = `Editing ${preset.name}. Save to update it.`;
+  $('posting-preset-name').focus();
+}
+
+function renderPostingSettings() {
+  const connections = $('posting-platform-connections');
+  connections.replaceChildren();
+  const checkboxes = $('posting-preset-platforms');
+  checkboxes.replaceChildren();
+  for (const platform of platforms) {
+    const item = el('div', 'connection-card');
+    item.append(el('strong', '', platform.name),
+      el('span', '', platform.configured ? 'Connected on server' : 'Needs server credentials'),
+      el('small', '', platform.mode === 'draft'
+        ? 'Creates a draft; finish posting in the app' : 'Direct publishing when authorized'));
+    connections.append(item);
+    const label = el('label');
+    const input = el('input');
+    input.type = 'checkbox';
+    input.value = platform.id;
+    label.append(input, document.createTextNode(platform.name));
+    checkboxes.append(label);
+  }
+  const list = $('posting-preset-list');
+  list.replaceChildren();
+  if (!publishingPresets.length) {
+    list.append(el('p', 'helper-note', 'No presets saved. Create a channel-specific preset on the left.'));
+  }
+  for (const preset of publishingPresets) {
+    const item = el('div', 'posting-preset-item');
+    const details = el('div');
+    details.append(el('strong', '', preset.name),
+      el('small', '', `${preset.platforms.join(', ')} · ${preset.visibility || 'private'}`));
+    const actions = el('div', 'posting-preset-actions');
+    const edit = el('button', 'small-action', 'Edit');
+    edit.type = 'button';
+    edit.addEventListener('click', () => editPostingPreset(preset));
+    const remove = el('button', 'small-action', 'Delete');
+    remove.type = 'button';
+    remove.addEventListener('click', async () => {
+      if (!confirm(`Delete posting preset "${preset.name}"? Scheduled posts are not affected.`)) return;
+      try {
+        const response = await fetch('/api/publishing/presets/' + encodeURIComponent(preset.name),
+          {method: 'DELETE'});
+        if (!response.ok) throw new Error('Could not delete posting preset');
+        $('posting-preset-feedback').textContent = `Deleted ${preset.name}.`;
+        if ($('posting-preset-name').value === preset.name) clearPostingPresetForm();
+        await loadPostingSettings();
+      } catch (error) { $('posting-preset-feedback').textContent = error.message; }
+    });
+    actions.append(edit, remove);
+    item.append(details, actions);
+    list.append(item);
+  }
+}
+
+async function loadPostingSettings() {
+  if (currentPage !== 'posting-settings') return;
+  try {
+    const [platformResponse, presetResponse] = await Promise.all([
+      fetch('/api/publishing/platforms', {cache: 'no-store'}),
+      fetch('/api/publishing/presets', {cache: 'no-store'})
+    ]);
+    if (!platformResponse.ok || !presetResponse.ok) throw new Error('Cannot load posting settings');
+    platforms = await platformResponse.json();
+    publishingPresets = await presetResponse.json();
+    renderPostingSettings();
+  } catch (error) { $('posting-preset-feedback').textContent = error.message; }
+}
+
+$('posting-preset-clear').addEventListener('click', clearPostingPresetForm);
+$('posting-preset-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const selected = [...$('posting-preset-platforms').querySelectorAll('input:checked')]
+    .map((input) => input.value);
+  if (!selected.length) {
+    $('posting-preset-feedback').textContent = 'Select at least one platform.';
+    return;
+  }
+  const payload = {
+    name: $('posting-preset-name').value.trim(), platforms: selected,
+    description: $('posting-preset-description').value.trim(),
+    visibility: $('posting-preset-visibility').value
+  };
+  try {
+    const response = await fetch('/api/publishing/presets', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(typeof result.detail === 'string'
+      ? result.detail : 'Could not save posting preset');
+    await loadPostingSettings();
+    $('posting-preset-feedback').textContent = `${result.name} saved. Available in Publishing.`;
+  } catch (error) { $('posting-preset-feedback').textContent = error.message; }
+});
+
 loadSettings();
 loadCreatorProfiles();
+loadPostingSettings();
 refresh();
 setInterval(() => {
   // Library is refreshed explicitly: don't interrupt paused previews, filters, or expanded folders.

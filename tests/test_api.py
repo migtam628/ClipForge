@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("CLIPFORGE_DATA_DIR", "/tmp/clipforge-test-data")
@@ -43,6 +44,11 @@ def test_split_framing_validates_boxes_and_requires_vertical_output():
     default = module.Options(framing="split")
     assert len(default.split_boxes) == 2
     assert default.aspect_ratio == "9:16"
+    assert default.split_ratio == 0.5
+    assert module.Options(framing="split", split_ratio=0.65).split_ratio == 0.65
+    for value in (-0.1, 0.29, 0.71, float("nan"), float("inf")):
+        with pytest.raises(ValueError):
+            module.Options(framing="split", split_ratio=value)
     response = client.post("/api/jobs", json={
         "url": "https://youtu.be/abc", "rights_confirmed": True,
         "framing": "split", "aspect_ratio": "16:9",
@@ -119,7 +125,8 @@ def test_split_upload_persists_manual_boxes_and_completes(tmp_path, monkeypatch)
     with source.open("rb") as stream:
         response = client.post("/api/uploads", data={
             "clip_seconds": "15", "max_clips": "1", "framing": "split",
-            "split_boxes": json.dumps(boxes), "rights_confirmed": "true",
+            "split_boxes": json.dumps(boxes), "split_ratio": "0.65",
+            "rights_confirmed": "true",
         }, files={"file": ("sample.mp4", stream, "video/mp4")})
     assert response.status_code == 202, response.text
     job_id = response.json()["id"]
@@ -131,8 +138,10 @@ def test_split_upload_persists_manual_boxes_and_completes(tmp_path, monkeypatch)
         time.sleep(0.1)
     assert job["status"] == "completed", job.get("error")
     assert job["options"]["split_boxes"] == boxes
+    assert job["options"]["split_ratio"] == 0.65
     assert job["clips"][0]["framing"] == "split"
     assert job["clips"][0]["split_boxes"] == boxes
+    assert job["clips"][0]["split_ratio"] == 0.65
     video = client.get(f"/api/jobs/{job_id}/clips/{job['clips'][0]['filename']}")
     assert video.status_code == 200 and len(video.content) > 500
 
