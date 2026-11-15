@@ -20,7 +20,12 @@ interview clips: the upper and lower panels are separately cropped from two
 user-positioned source rectangles. Choose a single local file to see a live
 preview, drag the two crop boxes over the people, and adjust their zoom sliders.
 The normalized crop coordinates are validated, saved with the job and applied
-to every rendered clip. For YouTube watch, Shorts and youtu.be URLs, click
+to every rendered clip. The Framing workbench now offers six real split presets
+(equal, larger top, larger bottom, tight, wide and swapped order), fine-grained
+panel-height adjustment (30–70% top), and synchronized source/result playback
+for **single uploaded videos**. The selected panel ratio reaches the FFmpeg
+renderer and is saved with the job and revision metadata; changing it alters
+the actual exported pixels. For YouTube watch, Shorts and youtu.be URLs, click
 **Load YouTube preview** in step 1 to opt in to an external YouTube player in
 step 2. The original-footage panel can play the embed and the vertical panel
 shows an **approximate still thumbnail crop guide** (not synchronized playback
@@ -31,6 +36,20 @@ import normally, but do not yet have a setup-time embed. For precise edits,
 use a local source file or review the downloaded source in the Library timeline.
 Loading the YouTube preview makes a browser request to YouTube and its thumbnail
 host; merely pasting the URL does not trigger those requests.
+
+**Posting Settings** is a dedicated page separate from Publishing and general
+Settings. It shows social connection readiness and lets you create, edit and
+delete persistent channel-specific publishing presets (platforms, YouTube
+visibility and description/hashtag templates). Presets already integrate with
+the existing approved send/schedule workflow. Deleting a preset does not cancel
+scheduled posts or delete published history; adding a preset never authorizes
+automatic posting or changes external account credentials.
+
+The larger goal is a full self-hosted production studio for shorts **and** long
+videos. See [ClipForge 2.0 capability matrix](docs/clipforge-2-capability-matrix.md)
+for what works now, important accuracy gaps (especially active-speaker framing),
+and the ordered build/test plan. The six split presets do not yet track a moving
+speaker within a clip; today, manual boxes remain fixed for each render.
 
 Other layouts remain available: smart face-aware framing, centered crop,
 blurred background and full-frame padding. Six caption styles are selectable
