@@ -47,6 +47,7 @@ $('create-button').addEventListener('click', createJob);
 // Guided four-step creation. All options continue using the existing job API.
 let journeyStep = 0;
 let previewObjectUrl = null;
+let previewYoutube = null;
 let splitBoxes = [
   {x: 0.04, y: 0.21, width: 0.36, height: 0.58},
   {x: 0.60, y: 0.21, width: 0.36, height: 0.58}
@@ -134,32 +135,72 @@ function renderFraming() {
       left: `${box.x * 100}%`, top: `${box.y * 100}%`,
       width: `${box.width * 100}%`, height: `${box.height * 100}%`
     });
-    const video = $(i === 0 ? 'portrait-video-a' : 'portrait-video-b');
-    if (split && previewObjectUrl) {
-      Object.assign(video.style, {
-        width: `${100 / box.width}%`, height: `${100 / box.height}%`,
-        left: `${-100 * box.x / box.width}%`, top: `${-100 * box.y / box.height}%`,
-        objectFit: 'fill'
-      });
-    } else {
-      Object.assign(video.style, {
-        width: '100%', height: '100%', left: '0', top: '0',
-        objectFit: $('framing').value === 'pad' ? 'contain' : 'cover'
-      });
+    for (const media of [$(i === 0 ? 'portrait-video-a' : 'portrait-video-b'),
+      $(i === 0 ? 'portrait-image-a' : 'portrait-image-b')]) {
+      if (split && (previewObjectUrl || previewYoutube)) {
+        Object.assign(media.style, {
+          width: `${100 / box.width}%`, height: `${100 / box.height}%`,
+          left: `${-100 * box.x / box.width}%`, top: `${-100 * box.y / box.height}%`,
+          objectFit: 'fill'
+        });
+      } else {
+        Object.assign(media.style, {
+          width: '100%', height: '100%', left: '0', top: '0',
+          objectFit: $('framing').value === 'pad' ? 'contain' : 'cover'
+        });
+      }
     }
   });
-  $('framing-instructions').textContent = split
-    ? 'Drag the colored boxes over each person. Use the zoom sliders to resize; arrow keys fine-tune a selected box.'
-    : 'Switch layouts to compare how the same source will be framed.';
+  $('framing-instructions').textContent = (split
+    ? 'Drag the colored boxes over each person. Use zoom sliders to resize; arrow keys fine-tune a selected box.'
+    : 'Switch layouts to compare how the same source will be framed.') +
+    (activeTab === 'url' && previewYoutube
+      ? ' YouTube guides are approximate; review the downloaded source in the Library editor.' : '');
+}
+
+function selectedUrlForPreview() {
+  const batch = $('url-list').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return batch[0] || $('url').value.trim();
+}
+
+function clearYoutubePreview() {
+  previewYoutube = null;
+  $('framing-embed').removeAttribute('src');
+  $('framing-embed').hidden = true;
+}
+
+function loadYoutubePreview() {
+  const selected = selectedUrlForPreview();
+  const parsed = parseYouTubePreview(selected);
+  if (!parsed) {
+    clearYoutubePreview();
+    loadSourcePreview();
+    $('url-preview-status').textContent = selected
+      ? 'Preview supports HTTPS YouTube watch, Shorts and youtu.be links. Other URLs can still be imported.'
+      : 'Enter a YouTube link first.';
+    return;
+  }
+  previewYoutube = {...parsed, sourceUrl: selected};
+  $('url-preview-status').textContent = $('url-list').value.trim()
+    ? 'Preview loaded for the first URL in your batch. Continue to Framing.'
+    : 'YouTube preview ready. Continue to Framing.';
+  loadSourcePreview();
 }
 
 function loadSourcePreview() {
   if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
   previewObjectUrl = null;
   const files = chosenVideoFiles();
+  const urlPreview = activeTab === 'url' && previewYoutube &&
+    previewYoutube.sourceUrl === selectedUrlForPreview();
   if (activeTab === 'upload' && files.length === 1) {
     previewObjectUrl = URL.createObjectURL(files[0]);
   }
+  const embed = $('framing-embed');
+  embed.hidden = !urlPreview;
+  if (urlPreview) {
+    if (embed.getAttribute('src') !== previewYoutube.embedUrl) embed.src = previewYoutube.embedUrl;
+  } else embed.removeAttribute('src');
   for (const id of ['framing-source', 'portrait-video-a', 'portrait-video-b']) {
     const video = $(id);
     video.pause();
@@ -171,14 +212,43 @@ function loadSourcePreview() {
       video.play().catch(() => {});
     }
   }
-  document.querySelectorAll('.portrait-placeholder').forEach((node) => {
-    node.hidden = Boolean(previewObjectUrl);
-  });
-  $('framing-empty').hidden = Boolean(previewObjectUrl);
-  $('framing-source-label').textContent = previewObjectUrl ? files[0].name :
-    'URL and batch sources are previewed after import';
+  for (const suffix of ['a', 'b']) {
+    const img = $(`portrait-image-${suffix}`);
+    const placeholder = img.nextElementSibling;
+    img.hidden = true;
+    img.removeAttribute('src');
+    placeholder.hidden = Boolean(previewObjectUrl);
+    if (urlPreview) {
+      const expectedId = previewYoutube.id;
+      img.onload = () => {
+        if (previewYoutube?.id !== expectedId || activeTab !== 'url') return;
+        img.hidden = false;
+        placeholder.hidden = true;
+      };
+      img.onerror = () => { img.hidden = true; placeholder.hidden = false; };
+      img.src = previewYoutube.thumbnailUrl;
+    }
+  }
+  $('framing-empty').hidden = Boolean(previewObjectUrl || urlPreview);
+  $('framing-source-label').textContent = previewObjectUrl ? files[0].name : urlPreview
+    ? 'YouTube player · first URL in batch if provided'
+    : 'Select a file or load a supported YouTube link';
+  $('portrait-preview-note').textContent = urlPreview
+    ? 'Still YouTube thumbnail crop guide only, not a synchronized video preview. Final framing uses downloaded footage; verify it in the Library timeline.'
+    : 'Local file previews use your source. Final exports use full-resolution FFmpeg rendering.';
   $('framing-stage').style.aspectRatio = '16 / 9';
   renderFraming();
+}
+
+$('load-url-preview').addEventListener('click', loadYoutubePreview);
+for (const id of ['url', 'url-list']) {
+  $(id).addEventListener('input', () => {
+    if (previewYoutube && previewYoutube.sourceUrl !== selectedUrlForPreview()) {
+      clearYoutubePreview();
+      $('url-preview-status').textContent = 'Source changed. Load the preview again for this URL.';
+      if (activeTab === 'url') loadSourcePreview();
+    }
+  });
 }
 
 $('framing-source').addEventListener('loadedmetadata', () => {

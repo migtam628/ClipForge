@@ -64,7 +64,7 @@
             <button type="button" class="tab active" id="url-tab" aria-selected="true">↗ Video URL</button>
             <button type="button" class="tab" id="upload-tab" aria-selected="false">⇧ Upload file</button>
           </div>
-          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><label for="url-list" class="batch-extra-label">Or queue multiple URLs (one per line, up to 100)</label><textarea id="url-list" class="batch-url-list" rows="3" placeholder="https://youtu.be/video1&#10;https://youtu.be/video2"></textarea><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div></div>
+          <div id="url-area" class="input-area"><label for="url">Video URL</label><div class="input-wrap"><span class="link-symbol">↗</span><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url"></div><label for="url-list" class="batch-extra-label">Or queue multiple URLs (one per line, up to 100)</label><textarea id="url-list" class="batch-url-list" rows="3" placeholder="https://youtu.be/video1&#10;https://youtu.be/video2"></textarea><div class="source-hints">SUPPORTED SOURCES <span>YouTube</span><span>Twitch</span><span>Kick</span><span>Vimeo</span><span>and more</span></div><div class="source-preview-actions"><button id="load-url-preview" type="button" class="small-action">Load YouTube preview</button><span id="url-preview-status" role="status">Preview is optional. Loading connects your browser to YouTube.</span></div></div>
           <div id="upload-area" class="input-area" hidden><label for="file">Select video files</label><div class="drop-zone"><input id="file" type="file" multiple accept="video/mp4,video/quicktime,video/x-matroska,video/webm"><div class="drop-icon">⇧</div><strong>Choose one or many videos</strong><span>Up to 100 files · 2 GB each · 8 GB per batch</span></div><label for="folder" class="batch-extra-label">Or choose a folder of videos</label><input id="folder" type="file" webkitdirectory multiple aria-label="Choose a video folder"><p class="helper-note" id="batch-selection-hint">Videos are queued one at a time for CPU-friendly processing. Each keeps its own retry checkpoints.</p></div>
           <div class="journey-tip">Your source stays private on this server. URL imports depend on the video host allowing a download; uploading your own MP4 is the most reliable option.</div>
           </div>
@@ -81,6 +81,7 @@
                 <div class="framing-card-head"><strong>Original footage</strong><span id="framing-source-label">Select a file for live preview</span></div>
                 <div class="framing-stage" id="framing-stage">
                   <video id="framing-source" playsinline muted loop preload="metadata" aria-label="Original video preview" hidden></video>
+                  <iframe id="framing-embed" title="YouTube source preview" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen hidden></iframe>
                   <div class="framing-empty" id="framing-empty">File previews appear here. For video links, framing is applied to the downloaded source during rendering.</div>
                   <div class="split-selection" id="split-selection" hidden>
                     <button type="button" class="crop-box crop-box-a" data-crop="0" aria-label="Move top split screen box" tabindex="0"><span>TOP · 1</span></button>
@@ -97,10 +98,10 @@
               <div class="framing-card portrait-card">
                 <div class="framing-card-head"><strong>Vertical result</strong><span>9:16 preview</span></div>
                 <div class="portrait-preview" id="portrait-preview">
-                  <div class="portrait-pane"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><span class="portrait-placeholder">Your clip</span></div>
-                  <div class="portrait-pane"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><span class="portrait-placeholder">Framing preview</span></div>
+                  <div class="portrait-pane"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-a" alt="Still thumbnail crop guide for the first pane" hidden><span class="portrait-placeholder">Your clip</span></div>
+                  <div class="portrait-pane"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-b" alt="Still thumbnail crop guide for the second pane" hidden><span class="portrait-placeholder">Framing preview</span></div>
                 </div>
-                <p class="helper-note">Preview uses your uploaded source. Final exports use full-resolution FFmpeg rendering.</p>
+                <p class="helper-note" id="portrait-preview-note">Local file previews use your source. Final exports use full-resolution FFmpeg rendering.</p>
               </div>
             </div>
             <div class="framing-extra"><label for="framing">Render mode</label><select id="framing"><option value="smart" selected>Smart · follow faces</option><option value="split">Split in two · manual positions</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
@@ -351,6 +352,7 @@
 </div>
 <script src="/assets/theme.js" defer></script>
 <script src="/assets/env-settings.js" defer></script>
+<script src="/assets/preview-url.js" defer></script>
 <script src="/assets/app.js" defer></script>
 <script src="/assets/analytics.js" defer></script>
 </body>
