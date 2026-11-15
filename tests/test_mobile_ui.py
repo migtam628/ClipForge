@@ -3,6 +3,7 @@
 These are intentionally static: they run without a browser, media files, or a
 running job. Visual acceptance is covered by the manual mobile QA checklist.
 """
+
 from html.parser import HTMLParser
 from pathlib import Path
 
