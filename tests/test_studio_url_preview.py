@@ -1,9 +1,9 @@
 """Public URL previews must not weaken the import or framing flow."""
 
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
