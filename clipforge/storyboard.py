@@ -33,6 +33,10 @@ LANGUAGES = {"en": "English", "es": "Spanish"}
 LOGGER = logging.getLogger("uvicorn.error")
 
 
+class FrameSamplingError(RuntimeError):
+    """A source frame could not be decoded; unrelated AI failures stay fatal."""
+
+
 def vision_status() -> dict:
     """Report actual installed model state without triggering model downloads.
 
@@ -161,15 +165,47 @@ def _transcript_evidence(transcript: list[dict], source_start: float,
 
 
 def _frame(source: Path, timestamp: float) -> bytes:
-    completed = subprocess.run([
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
-        "-ss", str(max(0, timestamp)), "-i", str(source),
-        "-frames:v", "1", "-vf", "scale=512:-2",
-        "-q:v", "7", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-    ], capture_output=True, timeout=30, check=True)
-    if not 200 < len(completed.stdout) <= 250000:
-        raise RuntimeError("Could not analyze a video frame; select transcript-only mode")
-    return completed.stdout
+    """Get one bounded frame, retrying with a cheaper nearby keyframe seek.
+
+    Some long-GOP or unindexed sources stall when FFmpeg decodes precisely to a
+    late timestamp. The fallback avoids accurate seeking and reduces image size;
+    it does not restart the entire storyboard or persist sampled images.
+    """
+    attempts = (
+        (max(0, timestamp), True, 512, 18),
+        (max(0, timestamp - 1.0), False, 384, 12),
+    )
+    last_error: Exception | None = None
+    for attempt, (seek, accurate, size, timeout) in enumerate(attempts, 1):
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-ss", str(seek),
+        ]
+        if not accurate:
+            command.append("-noaccurate_seek")
+        command += [
+            "-i", str(source), "-an", "-sn", "-dn", "-frames:v", "1",
+            "-vf", f"scale={size}:-2", "-q:v", "7", "-f", "image2pipe",
+            "-vcodec", "mjpeg", "pipe:1",
+        ]
+        try:
+            completed = subprocess.run(
+                command, capture_output=True, timeout=timeout, check=True,
+            )
+            if 200 < len(completed.stdout) <= 250000:
+                return completed.stdout
+            raise ValueError("Decoded frame size is invalid")
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            last_error = exc
+            LOGGER.warning(
+                "Video frame sampling attempt %s/2 failed near %.2fs (%s)",
+                attempt, timestamp, type(exc).__name__,
+            )
+    raise FrameSamplingError(
+        f"Could not decode a video frame near {timestamp:.2f}s after two "
+        "bounded attempts. Completed frame observations remain saved; "
+        "resume the job after checking source readability."
+    ) from last_error
 
 
 def _visual_evidence(source: Path, timestamp: float) -> str:
@@ -351,6 +387,7 @@ def build_storyboard(
                     and isinstance(value, str) and 0 < len(value) <= 400 and value.strip()
                 }
     evidence = []
+    frame_sample_failures = 0
     for entry in windows:
         speech = _transcript_evidence(
             transcript, source_start, entry["start"], entry["end"],
@@ -361,13 +398,25 @@ def build_storyboard(
             visual = frame_observations.get(key, "")
             if not visual:
                 midpoint = source_start + (entry["start"] + entry["end"]) / 2
-                visual = _visual_evidence(source, midpoint)
-                frame_observations[key] = visual
-                save_json(frame_cache_path, {
-                    "signature": frame_signature, "observations": frame_observations,
-                })
-            LOGGER.info("Narration visual evidence ready: window %s/%s", entry["id"] + 1,
-                        len(windows))
+                try:
+                    visual = _visual_evidence(source, midpoint)
+                except FrameSamplingError:
+                    # A broken or slow frame must not discard other verified
+                    # frame observations. Speech remains legitimate source
+                    # evidence for this window; an empty window remains silent.
+                    frame_sample_failures += 1
+                    LOGGER.warning(
+                        "Skipped unavailable video frame in window %s/%s",
+                        entry["id"] + 1, len(windows),
+                    )
+                else:
+                    frame_observations[key] = visual
+                    save_json(frame_cache_path, {
+                        "signature": frame_signature, "observations": frame_observations,
+                    })
+            if visual:
+                LOGGER.info("Narration visual evidence ready: window %s/%s", entry["id"] + 1,
+                            len(windows))
         evidence.append({
             **entry, "speech": speech, "frame_observation": visual,
             # About 2.1 spoken words/second fits conversational narration.
@@ -376,6 +425,11 @@ def build_storyboard(
                           if purpose == "overlay" else
                           max(3, min(24, int((entry["end"] - entry["start"]) * 2.1)))),
         })
+    if basis == "video" and not any(w["frame_observation"] for w in evidence):
+        raise RuntimeError(
+            "No video frames could be analyzed. Source video may be slow or "
+            "unreadable; resume later or choose explicit transcript-only mode."
+        )
     if not any(w["speech"] or w["frame_observation"] for w in evidence):
         raise RuntimeError(
             "No source evidence found in the selected clip; "
@@ -480,8 +534,12 @@ def build_storyboard(
     storyboard = {
         "script": " ".join(beat["text"] for beat in beats if beat["text"])[:1200],
         "beats": beats,
-        "analysis_basis": "video_frames_and_speech" if basis == "video" else "speech_only",
-        "frame_samples": len(evidence) if basis == "video" else 0,
+        "analysis_basis": (
+            "video_frames_partial_and_speech" if frame_sample_failures
+            else "video_frames_and_speech"
+        ) if basis == "video" else "speech_only",
+        "frame_samples": sum(bool(w["frame_observation"]) for w in evidence),
+        "frame_sample_failures": frame_sample_failures,
     }
     save_json(checkpoint, {"signature": signature, "storyboard": storyboard})
     return storyboard

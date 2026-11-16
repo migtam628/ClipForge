@@ -252,6 +252,14 @@ a second short prompt. Each successful observation is checkpointed as text in
 the job's private narration directory; a failed or interrupted job can resume
 without reanalyzing already-observed windows. Checkpoints are invalidated
 when the source file, selected timing, vision model or prompt version changes.
+Frame extraction now limits precise seeking to 18 seconds, then attempts a
+12-second lower-resolution keyframe seek near the same timestamp. If a single
+frame cannot be decoded but other frames are available, that window uses only
+its verified speech evidence (or remains blank), and the Library marks the
+result **partial video evidence** with a quality-review flag. If no video
+frames can be analyzed, ClipForge stops with an actionable error rather than
+misrepresenting a transcript-only script as video-grounded. Previously saved
+observations remain available when the job is resumed.
 No images are retained. CPU-only Moondream may take **two minutes or more per
 sampled frame**, so a 60-second clip with eight narration windows can take
 over 15 minutes for its visual pass alone. See the container logs for

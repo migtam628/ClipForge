@@ -113,6 +113,7 @@ def _media_inspection(path: Path) -> dict:
         "duration": duration,
         "width": int(video.get("width") or 0),
         "height": int(video.get("height") or 0),
+        "sample_aspect_ratio": video.get("sample_aspect_ratio"),
         "has_audio": bool(audios),
     }
 
@@ -138,6 +139,11 @@ def inspect_rendered_clip(
             "width": media["width"], "height": media["height"],
             "audio_present": media["has_audio"],
         }
+        sample_aspect_ratio = media.get("sample_aspect_ratio")
+        if sample_aspect_ratio:
+            metrics["sample_aspect_ratio"] = sample_aspect_ratio
+            if sample_aspect_ratio not in ("1:1", "1/1"):
+                fatal.append("render_pixel_aspect_mismatch")
         if abs(media["duration"] - expected_duration) > 1.25:
             fatal.append("render_duration_mismatch")
         desired = OUTPUT_SIZES
@@ -169,6 +175,8 @@ def inspect_rendered_clip(
             ):
                 review.append("narration_over_word_budget")
     review.extend(candidate.get("boundary_review") or [])
+    if candidate.get("frame_sample_failures", 0) > 0:
+        review.append("video_frame_sampling_incomplete")
     score = candidate.get("score")
     if isinstance(score, (float, int)) and not isinstance(score, bool) and score < 6:
         review.append("weak_highlight_score")

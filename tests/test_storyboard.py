@@ -90,6 +90,114 @@ def test_video_storyboard_samples_each_window_and_saves_timestamps(tmp_path, mon
     assert "Unrelated footage" not in checkpoint.read_text()
 
 
+def test_frame_timeout_uses_faster_keyframe_retry(monkeypatch, tmp_path):
+    attempts = []
+
+    def run(args, **kwargs):
+        attempts.append((args, kwargs))
+        if len(attempts) == 1:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return subprocess.CompletedProcess(args, 0, b"jpeg" * 100)
+
+    monkeypatch.setattr(storyboard.subprocess, "run", run)
+    assert storyboard._frame(tmp_path / "slow.mp4", 251.25) == b"jpeg" * 100
+    assert [opts["timeout"] for _, opts in attempts] == [18, 12]
+    assert "-noaccurate_seek" not in attempts[0][0]
+    assert "-noaccurate_seek" in attempts[1][0]
+    assert "251.25" in attempts[0][0]
+    assert "250.25" in attempts[1][0]
+    assert "scale=384:-2" in attempts[1][0]
+
+
+def test_unreadable_frame_raises_actionable_error_after_two_attempts(
+        monkeypatch, tmp_path):
+    calls = []
+
+    def fail(args, **kwargs):
+        calls.append(args)
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(storyboard.subprocess, "run", fail)
+    with pytest.raises(storyboard.FrameSamplingError, match=r"251.25s.*resume"):
+        storyboard._frame(tmp_path / "slow.mp4", 251.25)
+    assert len(calls) == 2
+
+
+def test_ffmpeg_keyframe_fallback_produces_a_real_image(tmp_path, monkeypatch):
+    source = tmp_path / "short.mp4"
+    native_run = subprocess.run
+    native_run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=2",
+        "-c:v", "libx264", "-preset", "ultrafast", str(source),
+    ], check=True, capture_output=True)
+
+    def fail_precise_seek(args, **kwargs):
+        if "-noaccurate_seek" not in args:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        return native_run(args, **kwargs)
+
+    monkeypatch.setattr(storyboard.subprocess, "run", fail_precise_seek)
+    jpeg = storyboard._frame(source, 1.25)
+    assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
+
+
+def test_partial_frame_failures_are_reported_and_resume_retries_only_missing(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture")
+    checkpoint = tmp_path / "scene.json"
+    attempts = []
+
+    def one_bad_frame(_source, timestamp):
+        attempts.append(timestamp)
+        if timestamp == 3.0:
+            raise storyboard.FrameSamplingError("Frame seek timed out")
+        return "A real person appears on screen."
+
+    monkeypatch.setattr(storyboard, "_visual_evidence", one_bad_frame)
+    monkeypatch.setattr(storyboard, "_ollama", fake_response)
+    transcript = [{"start": 0, "end": 6, "text": "Person describes the scene."}]
+    first = storyboard.build_storyboard(
+        transcript, 0, 12, "casual", "en", checkpoint,
+        source=source, basis="video",
+    )
+    assert first["frame_sample_failures"] == 1
+    assert first["frame_samples"] == 1
+    assert first["analysis_basis"] == "video_frames_partial_and_speech"
+    assert first["beats"][0]["basis"] == "speech"
+    assert first["beats"][1]["basis"] == "frame"
+    assert attempts == [3.0, 9.0]
+
+    attempts.clear()
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda _source, timestamp: attempts.append(timestamp) or "A gate opens.")
+    completed = storyboard.build_storyboard(
+        transcript, 0, 12, "casual", "en", checkpoint,
+        source=source, basis="video",
+    )
+    assert attempts == [3.0]
+    assert completed["frame_sample_failures"] == 0
+    assert completed["frame_samples"] == 2
+    assert completed["analysis_basis"] == "video_frames_and_speech"
+
+
+def test_all_missing_video_frames_do_not_fake_video_grounding(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"fixture")
+    monkeypatch.setattr(storyboard, "_visual_evidence",
+                        lambda *_: (_ for _ in ()).throw(
+                            storyboard.FrameSamplingError("Unable to decode")))
+    monkeypatch.setattr(storyboard, "_ollama", lambda *_args, **_kw:
+                        pytest.fail("Should not generate an ungrounded script"))
+    with pytest.raises(RuntimeError, match="No video frames could be analyzed"):
+        storyboard.build_storyboard(
+            [{"start": 0, "end": 12, "text": "Audio evidence is present."}],
+            0, 12, "casual", "en", tmp_path / "scene.json",
+            source=source, basis="video",
+        )
+
+
 def test_speech_only_never_calls_vision(tmp_path, monkeypatch):
     monkeypatch.setattr(storyboard, "_ollama", fake_response)
     monkeypatch.setattr(storyboard, "_visual_evidence",

@@ -105,6 +105,21 @@ def test_broken_render_is_flagged_not_labeled_ready(monkeypatch, tmp_path):
     assert "weak_highlight_score" in result["review_flags"]
 
 
+def test_partial_video_analysis_is_flagged_for_review(monkeypatch, tmp_path):
+    monkeypatch.setattr(quality, "_media_inspection", lambda _: {
+        "duration": 10, "width": 960, "height": 720,
+        "sample_aspect_ratio": "1:1", "has_audio": False,
+    })
+    report = quality.inspect_rendered_clip(
+        tmp_path / "sample.mp4", expected_duration=10, aspect_ratio="4:3",
+        source_has_audio=False, narration="none", script=None, beats=[],
+        captions_requested=False, captions_added=False,
+        candidate={"frame_sample_failures": 1},
+    )
+    assert report["technical_pass"]
+    assert "video_frame_sampling_incomplete" in report["review_flags"]
+
+
 def test_genuine_export_with_ffmpeg_is_technically_checked(tmp_path):
     source = tmp_path / "source.mp4"
     clip = tmp_path / "clip.mp4"

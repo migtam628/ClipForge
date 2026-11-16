@@ -1501,7 +1501,10 @@ function card(job, mode = currentPage) {
         const scriptText = el('div', 'script-copy');
         if (clip.storyboard?.length) {
           const basis = clip.analysis_basis === 'video_frames_and_speech'
-            ? 'Video frames + spoken content' : 'Spoken content only';
+            ? 'Video frames + spoken content'
+            : clip.analysis_basis === 'video_frames_partial_and_speech'
+              ? 'Partial video frames + spoken content (some frames unavailable)'
+              : 'Spoken content only';
           scriptText.append(el('p', 'script-basis', basis +
             ' · review AI descriptions against the actual video.'));
           for (const beat of clip.storyboard) {
