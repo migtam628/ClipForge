@@ -48,14 +48,6 @@ def test_library_frontend_can_reuse_existing_job_api():
         assert selector in css
 
 
-def test_library_supports_responsive_clips_and_progress_percent():
-    source = client.get("/assets/app.js").text
-    css = client.get("/assets/style.css").text
-    assert "libraryProgress(entry.job)" in source
-    assert "bar.setAttribute('aria-valuenow', String(percent))" in source
-    assert "video.preload = 'metadata'" in source
-    assert "@media (max-width: 750px)" in css
-    assert ".media-library-review-rail" in css
 def test_script_startup_references_existing_dom_ids():
     """All static DOM lookups must resolve before refresh populates Library."""
     html = client.get("/library").text
@@ -66,6 +58,16 @@ def test_script_startup_references_existing_dom_ids():
     missing = sorted(element_id for element_id in referenced
                      if f'id="{element_id}"' not in html)
     assert missing == []
+
+
+def test_library_supports_responsive_clips_and_progress_percent():
+    source = client.get("/assets/app.js").text
+    css = client.get("/assets/style.css").text
+    assert "libraryProgress(entry.job)" in source
+    assert "bar.setAttribute('aria-valuenow', String(percent))" in source
+    assert "video.preload = 'metadata'" in source
+    assert "@media (max-width: 750px)" in css
+    assert ".media-library-review-rail" in css
 
 
 def test_workspace_navigation_remains_available_in_responsive_styles():
