@@ -51,7 +51,7 @@ for what works now, important accuracy gaps (especially active-speaker framing),
 and the ordered build/test plan. The six split presets do not yet track a moving
 speaker within a clip; today, manual boxes remain fixed for each render.
 
-Other layouts remain available: smart face-aware framing, centered crop,
+Other layouts remain available: smart face-aware/motion framing, centered crop,
 blurred background and full-frame padding. Six caption styles are selectable
 from visual examples; their sample words are illustrative, while rendered
 captions come from actual recognized speech. Clip discovery and narrated scripts
@@ -73,10 +73,16 @@ according to the actual output dimensions. It interpolates the smoothed path at
 20 updates per second, so playback pans smoothly rather than jumping between
 detections. Missing detections hold the last subject position; if a face cannot
 be confirmed in at least two sampled frames, the renderer safely falls back to
-centered framing.
-This remains basic face-aware tracking, **not general object or active-speaker
-tracking**, identity recognition, or guaranteed tracking of multiple people.
-Raw face images/biometric templates are not retained.
+centered framing. If no face is confirmed, a second bounded OpenCV pass can
+follow **one clear moving foreground region in a mostly static-camera scene**.
+It samples no more than 32 reduced-resolution frames, rejects ambiguous or
+large/global motion, and falls back to center whenever evidence is weak.
+The library labels the actual method as face-aware, motion-aware, or centered.
+Neither method is general object or active-speaker tracking, identity
+recognition, nor reliable multi-person tracking. A moving background, camera
+pan, scene transition or title animation may prevent motion tracking or produce
+an unsuitable subject; always review exports before publishing. Raw sampled
+frames, masks and biometric templates are not retained.
 
 **Automatic captions** now include two animated styles:
 
