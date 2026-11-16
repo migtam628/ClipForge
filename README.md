@@ -751,6 +751,20 @@ individual rendered MP4 clips in its persistent media volume.
   incomplete stages, keeping the original job ID.
 - Jobs interrupted by a container restart automatically requeue at startup.
   Failed jobs are not automatically restarted forever; resume them manually.
+- **Cancel job** is available during queued, downloading, analyzing,
+  transcribing, selecting, and rendering states on Activity and Library. The
+  `POST /api/jobs/{id}/cancel` endpoint stops queued work immediately and
+  prevents an active worker from committing another stage. A CPU-bound FFmpeg
+  or Ollama call already in progress may take time to return to its next safe
+  cancellation checkpoint. The job shows **Canceling** until its worker exits,
+  then **Canceled**; canceled jobs are not auto-resumed.
+- **Delete job** is available at every stage, including while processing. After
+  confirmation, `DELETE /api/jobs/{id}` cancels queued work and hides the job.
+  If any worker is still using its files, the API returns `202 Accepted` and
+  cleans up only after the worker exits; otherwise it returns `204 No Content`
+  after removal. Interrupted deletions complete on the next server startup.
+  A remote publication already in flight may still finish on its platform;
+  deleting local job data cannot retract it.
 - Model changes invalidate AI score checkpoints. Browser uploads interrupted
   mid-upload must be submitted again; Whisper transcription is checkpointed
   when fully complete, not paragraph-by-paragraph. Invalid source media and
