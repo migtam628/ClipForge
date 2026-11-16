@@ -1485,8 +1485,10 @@ function card(job, mode = currentPage) {
       if (clip.voice_marker) tagTarget.append(el('span', 'clip-tag', '◉ Spoken clip marker'));
       if (clip.brand_text) tagTarget.append(el('span', 'clip-tag', '◇ ' + clip.brand_text));
       if (clip.face_tracking) tagTarget.append(el('span', 'clip-tag', '◉ Face-aware crop'));
+      else if (clip.motion_tracking) tagTarget.append(el('span', 'clip-tag', '◉ Motion-aware crop'));
       if (clip.framing === 'split') tagTarget.append(el('span', 'clip-tag', 'Two-person split'));
-      else if (clip.framing === 'smart') tagTarget.append(el('span', 'clip-tag', 'Centered fallback'));
+      else if (clip.framing === 'smart' && !clip.face_tracking && !clip.motion_tracking)
+        tagTarget.append(el('span', 'clip-tag', 'Centered fallback'));
       if (clip.revision_count) tagTarget.append(el('span', 'clip-tag', 'Revision ' + clip.revision_count));
       if (clip.revision_state === 'queued' || clip.revision_state === 'rendering')
         description.append(el('p', 'editor-progress', '⌁ Rendering your edited version…'));
@@ -2265,6 +2267,8 @@ function renderLibraryReview(entries, target) {
       selected.clip.voiceover_added && 'Story voiceover',
       selected.clip.framing === 'split' && 'Split layout',
       selected.clip.face_tracking && 'Face-aware crop',
+      selected.clip.motion_tracking && 'Motion-aware crop',
+      selected.clip.framing === 'smart' && !selected.clip.face_tracking && !selected.clip.motion_tracking && 'Centered fallback',
       selected.clip.revision_count && `Revision ${selected.clip.revision_count}`
     ].filter(Boolean);
     if (attributes.length) {

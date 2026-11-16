@@ -203,3 +203,20 @@ def plan_face_tracking(source: Path, start: float, duration: float, output: Path
         return False
     finally:
         capture.release()
+
+
+def plan_subject_tracking(source: Path, start: float, duration: float, output: Path,
+                          out_width: int = 720, out_height: int = 1280) -> str | None:
+    """Choose a reliable face first, then conservative static-camera motion.
+
+    Returns the actual tracking method, not a generic success flag, so saved
+    clip metadata never mislabels motion as detected faces. None means centered
+    framing; both optional detectors can fail without preventing a render.
+    """
+    if plan_face_tracking(source, start, duration, output, out_width, out_height):
+        return "face"
+    from clipforge.motion_frame import plan_motion_tracking
+
+    if plan_motion_tracking(source, start, duration, output, out_width, out_height):
+        return "motion"
+    return None

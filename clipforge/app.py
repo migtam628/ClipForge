@@ -59,7 +59,7 @@ from clipforge.narration import (
 from clipforge.publishing import platform_status, publish
 from clipforge.quality import inspect_rendered_clip, refine_speech_boundaries
 from clipforge.recovery import load_json, recover_source, save_json
-from clipforge.smart_frame import plan_face_tracking
+from clipforge.smart_frame import plan_subject_tracking
 from clipforge.storyboard import build_storyboard, synthesize_timed_voice, vision_status
 
 DATA_DIR = Path(os.environ.get("CLIPFORGE_DATA_DIR", "./clipforge-data")).resolve()
@@ -564,12 +564,14 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                 partial = output / f".clip-{index:03d}.partial.mp4"
                 partial.unlink(missing_ok=True)
                 smart_track = None
+                tracking_mode = None
                 if opts.framing == "smart":
                     tracking_file = output / f"clip-{index:03d}-tracking.txt"
-                    if plan_face_tracking(
+                    tracking_mode = plan_subject_tracking(
                         source_path, candidate["start"], candidate["duration"],
                         tracking_file, *OUTPUT_SIZES[opts.aspect_ratio],
-                    ):
+                    )
+                    if tracking_mode:
                         smart_track = tracking_file
                 render_clip(
                     source_path, partial, candidate["start"], candidate["duration"],
@@ -605,7 +607,9 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "brand_text": opts.brand_text.strip(),
                     "hook_style": opts.hook_style if hook_file else "none",
                     "caption_style": opts.caption_style if subtitles else "none",
-                    "face_tracking": smart_track is not None,
+                    "face_tracking": tracking_mode == "face",
+                    "motion_tracking": tracking_mode == "motion",
+                    "tracking_mode": tracking_mode or "center",
                     **candidate,
                 })
             # Observable technical checks plus clearly marked editorial uncertainty.
@@ -1335,10 +1339,14 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             if write_brand_sticker(edit.brand_text, edit.duration, proposed):
                 brand_file = proposed
         smart_track = None
+        tracking_mode = None
         if edit.framing == "smart":
             track = output / f"{base}-tracking.txt"
             dimensions = OUTPUT_SIZES[export_ratio]
-            if plan_face_tracking(source, edit.start, edit.duration, track, *dimensions):
+            tracking_mode = plan_subject_tracking(
+                source, edit.start, edit.duration, track, *dimensions,
+            )
+            if tracking_mode:
                 smart_track = track
         render_clip(
             source, partial, edit.start, edit.duration, export_ratio,
@@ -1386,7 +1394,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 key: target.get(key) for key in (
                     "filename", "thumbnail", "start", "duration", "title",
                     "effect", "framing", "captions_added", "voiceover_added",
-                    "context_added",
+                    "context_added", "face_tracking", "motion_tracking", "tracking_mode",
                     "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "brand_text",
@@ -1407,7 +1415,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 hook_style=edit.hook_style if hook_file else "none",
                 voiceover_added=voiceover is not None,
                 context_added=context_file is not None,
-                face_tracking=smart_track is not None,
+                face_tracking=tracking_mode == "face",
+                motion_tracking=tracking_mode == "motion",
+                tracking_mode=tracking_mode or "center",
                 narration=revised_narration,
                 script=revised_script,
                 storyboard=revised_beats,
