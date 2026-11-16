@@ -177,6 +177,8 @@ def inspect_rendered_clip(
     review.extend(candidate.get("boundary_review") or [])
     if candidate.get("frame_sample_failures", 0) > 0:
         review.append("video_frame_sampling_incomplete")
+    if candidate.get("script_fallbacks", 0) > 0:
+        review.append("script_contains_source_excerpts_after_ai_timeout")
     score = candidate.get("score")
     if isinstance(score, (float, int)) and not isinstance(score, bool) and score < 6:
         review.append("weak_highlight_score")

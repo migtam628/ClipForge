@@ -604,6 +604,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     "frame_samples": storyboard["frame_samples"] if storyboard else 0,
                     "frame_sample_failures": storyboard.get("frame_sample_failures", 0)
                     if storyboard else 0,
+                    "script_fallbacks": storyboard.get("script_fallbacks", 0)
+                    if storyboard else 0,
                     "creator_focus": opts.clip_focus,
                     "creator_niche": opts.content_niche,
                     "brand_text": opts.brand_text.strip(),
@@ -1389,6 +1391,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 "creator_niche": job["options"].get("content_niche", "general"),
                 "frame_sample_failures": storyboard.get("frame_sample_failures", 0)
                 if storyboard else 0,
+                "script_fallbacks": storyboard.get("script_fallbacks", 0)
+                if storyboard else 0,
             },
         )
         # Commit metadata only after a playable final MP4 exists.
@@ -1403,7 +1407,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "context_added", "face_tracking", "motion_tracking", "tracking_mode",
                     "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
-                    "frame_sample_failures",
+                    "frame_sample_failures", "script_fallbacks",
                     "brand_text",
                     "segments", "music_enabled", "music_volume",
                 )
@@ -1435,6 +1439,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 frame_samples=(storyboard["frame_samples"] if storyboard else 0),
                 frame_sample_failures=(storyboard.get("frame_sample_failures", 0)
                                        if storyboard else 0),
+                script_fallbacks=(storyboard.get("script_fallbacks", 0)
+                                  if storyboard else 0),
                 brand_text=edit.brand_text.strip(),
                 source_volume=(edit.source_volume if edit.source_volume is not None
                                else (0.18 if voiceover else 1.0)),

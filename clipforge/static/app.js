@@ -1507,6 +1507,9 @@ function card(job, mode = currentPage) {
               : 'Spoken content only';
           scriptText.append(el('p', 'script-basis', basis +
             ' · review AI descriptions against the actual video.'));
+          if (clip.script_fallbacks) scriptText.append(el('p', 'script-basis',
+            `${clip.script_fallbacks} section(s) use source excerpts because the AI timed out. ` +
+            'Review these drafts before publishing.'));
           for (const beat of clip.storyboard) {
             const time = (n) => {
               const seconds = Math.round(n);
