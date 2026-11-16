@@ -1,11 +1,39 @@
 """Model-independent AI logic and real media processing integration tests."""
 import subprocess
+import json
+from io import BytesIO
 
 import pytest
 
 from clipforge import ai
 from clipforge.captions import write_captions
 from clipforge.engine import probe, render_clip
+
+
+def test_ai_readiness_checks_installed_model(monkeypatch):
+    monkeypatch.setenv("CLIPFORGE_OLLAMA_URL", "http://ollama:11434")
+    monkeypatch.setenv("CLIPFORGE_AI_MODEL", "llama3.2:3b")
+
+    class Response(BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            self.close()
+
+    monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: Response(
+        json.dumps({"models": [{"name": "llama3.2:3b"}]}).encode()))
+    assert ai.ai_capabilities()["model_installed"] is True
+    assert ai.ai_capabilities()["status"] == "ready"
+    monkeypatch.setenv("CLIPFORGE_AI_MODEL", "missing:latest")
+    assert ai.ai_capabilities()["status"] == "missing_model"
+
+
+def test_ai_readiness_rejects_remote_ollama(monkeypatch):
+    monkeypatch.setenv("CLIPFORGE_OLLAMA_URL", "http://example.com:11434")
+    monkeypatch.setattr(ai, "urlopen", lambda *_args, **_kwargs: pytest.fail(
+        "Remote Ollama should never be queried"))
+    assert ai.ai_capabilities()["status"] == "not_configured"
 
 
 def _segments():

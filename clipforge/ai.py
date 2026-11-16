@@ -19,11 +19,43 @@ from urllib.request import Request, urlopen
 
 
 def ai_capabilities() -> dict:
+    """Check the actual local text model, not just whether a URL was supplied."""
+    model = os.environ.get("CLIPFORGE_AI_MODEL", "llama3.2:3b").strip()
+    base = os.environ.get("CLIPFORGE_OLLAMA_URL", "").rstrip("/")
+    parsed = urlsplit(base)
+    configured = parsed.scheme == "http" and parsed.hostname in {
+        "ollama", "localhost", "127.0.0.1",
+    }
+    status = "not_configured" if not configured else "unavailable"
+    note = "Configure local Ollama to use AI highlight selection."
+    installed = False
+    if configured:
+        try:
+            with urlopen(base + "/api/tags", timeout=4) as response:
+                payload = json.loads(response.read(1000000))
+            models = payload.get("models")
+            if not isinstance(models, list):
+                raise ValueError("Invalid model catalog")
+            names = {
+                item[key] for item in models if isinstance(item, dict)
+                for key in ("name", "model") if isinstance(item.get(key), str)
+            }
+            installed = model in names or (":" not in model and model + ":latest" in names)
+            status = "ready" if installed else "missing_model"
+            note = ("Local language model is installed." if installed else
+                    f"Model {model} is missing. Run: docker compose --profile ai "
+                    f"exec ollama ollama pull {model}")
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, KeyError):
+            note = "Ollama is unreachable. Check the local container and its logs."
+    whisper = importlib.util.find_spec("faster_whisper") is not None
     return {
-        "whisper_installed": importlib.util.find_spec("faster_whisper") is not None,
-        "ollama_configured": bool(os.environ.get("CLIPFORGE_OLLAMA_URL")),
-        "model": os.environ.get("CLIPFORGE_AI_MODEL", "llama3.2:3b"),
-        "note": "AI requires Ollama with a downloaded model and faster-whisper.",
+        "whisper_installed": whisper,
+        "ollama_configured": configured,
+        "model": model,
+        "model_installed": installed,
+        "status": status,
+        "ready": whisper and installed,
+        "note": note if whisper else note + " Install faster-whisper to enable transcription.",
     }
 
 
