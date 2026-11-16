@@ -2043,9 +2043,10 @@ async function loadSettings() {
     if (currentPage === 'settings') {
       applyDefaults(settings.defaults, 'settings-');
       $('settings-ai-status').textContent =
-        'Whisper: ' + (settings.ai.whisper_installed ? 'installed' : 'unavailable') +
-        ' · Ollama: ' + (settings.ai.ollama_configured ? 'configured' : 'not configured') +
-        ' · Model: ' + settings.ai.model;
+        (settings.ai.ready ? 'Ready for AI highlight selection.' : 'AI setup needs attention.') +
+        ' Whisper: ' + (settings.ai.whisper_installed ? 'installed' : 'unavailable') +
+        ' · Ollama: ' + settings.ai.status +
+        ' · Model: ' + settings.ai.model + '. ' + settings.ai.note;
       const yt = settings.youtube_import || {configured: false, status: 'not_configured'};
       $('settings-youtube-status').textContent =
         yt.status === 'ready'
