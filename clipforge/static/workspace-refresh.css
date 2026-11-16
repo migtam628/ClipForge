@@ -52,6 +52,10 @@
   aspect-ratio: var(--media-aspect, 9 / 16);
   max-height: 400px;
 }
+.media-library-row-poster .media-library-thumb,
+.media-library-rail-item .media-library-thumb {
+  aspect-ratio: var(--media-aspect, 9 / 16);
+}
 .media-library-thumb img { object-fit: contain; }
 .media-video-meta {
   position: absolute; z-index: 2; top: 10px; left: 10px;

@@ -252,6 +252,14 @@ a second short prompt. Each successful observation is checkpointed as text in
 the job's private narration directory; a failed or interrupted job can resume
 without reanalyzing already-observed windows. Checkpoints are invalidated
 when the source file, selected timing, vision model or prompt version changes.
+Frame extraction now limits precise seeking to 18 seconds, then attempts a
+12-second lower-resolution keyframe seek near the same timestamp. If a single
+frame cannot be decoded but other frames are available, that window uses only
+its verified speech evidence (or remains blank), and the Library marks the
+result **partial video evidence** with a quality-review flag. If no video
+frames can be analyzed, ClipForge stops with an actionable error rather than
+misrepresenting a transcript-only script as video-grounded. Previously saved
+observations remain available when the job is resumed.
 No images are retained. CPU-only Moondream may take **two minutes or more per
 sampled frame**, so a 60-second clip with eight narration windows can take
 over 15 minutes for its visual pass alone. See the container logs for
@@ -261,16 +269,23 @@ resuming a job that is still processing.
 **Timed script reliability:** The language model writes at most two windows
 per request using a JSON schema and checks that every returned ID matches the
 requested window. A malformed, truncated, or timed-out two-window reply is
-retried as individual windows. Each valid beat is saved immediately; a
-persistent timeout identifies the failed window and stops rather than
-inventing a script. Script requests use bounded attempts so a slow two-window
+retried as individual windows with a smaller prompt and lower output-token
+budget. Before text drafting, ClipForge asks local Ollama to unload a separate
+vision model to free RAM. Each valid beat is saved immediately. If an
+individual window also times out, ClipForge can use a short excerpt of the
+actual observed frame description or spoken source words for that window.
+Such excerpts are explicitly labeled in the script and quality audit as
+**requiring human review**, not represented as generated or publish-ready copy.
+If the window has no source evidence to fall back on, the job stops with a
+recoverable error. Script requests use bounded attempts so a slow two-window
 request does not repeat a full timeout three times before individual recovery.
 Valid text drafts are saved separately from frame descriptions so a resumed
 job can continue without repeating earlier visual analysis or valid narration
 beats. Follow `Timed narration script ready: windows N-M/T` in the container
-logs. No source text or raw model output is included in error logs. If even
+logs. No source text or raw model output is included in error logs. If
 individual windows repeatedly time out, check Ollama CPU/RAM utilization and
-the configured `CLIPFORGE_AI_TIMEOUT` before resuming.
+the configured `CLIPFORGE_AI_TIMEOUT` before resuming. Review and rewrite any
+fallback excerpts in Library before publishing or using text-to-speech.
 
 **Limitations:** This is a still-frame sampler, not motion recognition or
 continuous shot-by-shot video understanding. It can miss quick events or
