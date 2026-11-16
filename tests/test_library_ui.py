@@ -1,4 +1,6 @@
 """Library layout and navigation regression coverage."""
+import re
+
 from fastapi.testclient import TestClient
 
 from clipforge.app import app
@@ -54,6 +56,16 @@ def test_library_supports_responsive_clips_and_progress_percent():
     assert "video.preload = 'metadata'" in source
     assert "@media (max-width: 750px)" in css
     assert ".media-library-review-rail" in css
+def test_script_startup_references_existing_dom_ids():
+    """All static DOM lookups must resolve before refresh populates Library."""
+    html = client.get("/library").text
+    javascript = client.get("/assets/app.js").text
+    referenced = set(re.findall(r"\$\(['\"]([^'\"]+)['\"]\)", javascript))
+    # Notifications create this node on demand, so it is not part of the HTML.
+    referenced.discard("global-toast")
+    missing = sorted(element_id for element_id in referenced
+                     if f'id="{element_id}"' not in html)
+    assert missing == []
 
 
 def test_workspace_navigation_remains_available_in_responsive_styles():

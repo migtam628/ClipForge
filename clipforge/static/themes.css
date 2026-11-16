@@ -216,21 +216,23 @@ html[data-theme="control"] .library-job {padding:0;}
 html[data-theme="control"] .library-job>.job-actions {padding:0 17px 12px;}
 html[data-theme="control"] .library-job>.job-actions:last-child {padding:10px 17px;}
 @media(max-width:900px){
-  html[data-theme="editorial"] .shell,html[data-theme="control"] .shell {display:flex;flex-direction:column;}
-  html[data-theme="editorial"] .main-content,html[data-theme="control"] .main-content {padding:28px 21px;}
-  html[data-theme="editorial"] .sidebar,html[data-theme="control"] .sidebar {
-    position:sticky;top:0;z-index:20;display:flex;height:auto;flex-direction:row;
-    flex-wrap:wrap;align-items:center;padding:12px 20px;gap:7px;
+  html[data-theme="editorial"] .shell,html[data-theme="control"] .shell {display:block;}
+  html[data-theme="editorial"] .sidebar,html[data-theme="control"] .sidebar {display:none!important;}
+  html[data-theme="editorial"] .topbar,html[data-theme="control"] .topbar {height:58px;}
+  html[data-theme="editorial"] .main-content,html[data-theme="control"] .main-content,
+  html[data-theme="editorial"] .main-content.is-framing-workspace,html[data-theme="control"] .main-content.is-framing-workspace {
+    width:100%;max-width:100%;padding:27px 18px calc(var(--mobile-nav-height) + 55px + env(safe-area-inset-bottom));
   }
-  html[data-theme="editorial"] .sidebar .section-label,
-  html[data-theme="control"] .sidebar .section-label,
-  html[data-theme="editorial"] .sidebar-bottom,
-  html[data-theme="control"] .sidebar-bottom {display:none;}
-  html[data-theme="editorial"] .brand,html[data-theme="control"] .brand {margin:0 12px 0 0;}
-  html[data-theme="editorial"] .main-nav,html[data-theme="control"] .main-nav {flex:1;flex-direction:row;overflow-x:auto;gap:4px;}
-  html[data-theme="editorial"] .sidebar>nav:not(.main-nav),html[data-theme="control"] .sidebar>nav:not(.main-nav) {flex:0 0 auto;}
-  html[data-theme="editorial"] .nav-link,html[data-theme="control"] .nav-link {height:39px;min-width:max-content;}
+  html[data-theme="control"] .creator-panel {padding:20px;}
+  html[data-theme="control"] .page-heading h1 {font-size:clamp(31px,4.7vw,43px);letter-spacing:-1.2px;}
   .appearance-label {display:none;}
+}
+@media(max-width:480px){
+  html[data-theme="editorial"] .main-content,html[data-theme="control"] .main-content,
+  html[data-theme="editorial"] .main-content.is-framing-workspace,html[data-theme="control"] .main-content.is-framing-workspace {
+    padding:23px 12px calc(var(--mobile-nav-height) + 46px + env(safe-area-inset-bottom));
+  }
+  html[data-theme="control"] .creator-panel {padding:14px;}
 }
 @media(max-width:680px){
   .theme-choices {grid-template-columns:1fr;}
