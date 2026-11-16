@@ -216,6 +216,12 @@ body:not([data-page='library']) a:focus-visible {
   padding: 19px 22px; box-shadow: none;
 }
 #view-activity .job:has(.job-status.failed) { border-left-color: #dc7b7b; }
+#view-activity .job:has(.job-status.canceled) { border-left-color: #c99b72; }
+.job-status.canceling { color: #eccd8f; border-color: #aa8a52; }
+.job-status.canceled, .media-library-status.status-canceled { color: #e8b58a; border-color: #a97b55; }
+.job-actions .delete-job { color: #e5a4a4; border-color: #78565b; }
+.job-actions .delete-job:hover { background: #322028; }
+.job-canceled-note { color: #d1b292; font-size: 12px; margin: 12px 0 0; }
 #view-activity .job-head h3 { font-size: 14px; color: var(--theme-ink); }
 #view-activity .progress-bg { background: var(--theme-panel-hi); height: 6px; }
 #view-activity .progress-fill { background: var(--theme-accent); }

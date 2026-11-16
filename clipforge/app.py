@@ -12,7 +12,7 @@ import subprocess
 import threading
 import uuid
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -73,10 +73,16 @@ POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
 PUBLISH_STOP = threading.Event()
 LOCK = threading.RLock()
+JOB_FUTURES: dict[str, set[Future]] = {}
 STATIC = Path(__file__).resolve().parent / "static"
 LOGGER = logging.getLogger("uvicorn.error")
 
 ACTIVE_STATES = {"queued", "downloading", "analyzing", "transcribing", "selecting", "rendering"}
+STOPPED_STATES = {"canceling", "canceled", "deleting"}
+
+
+class JobCancelled(Exception):
+    """A worker reached a cancellation checkpoint; keep its terminal state."""
 
 
 @asynccontextmanager
@@ -329,8 +335,62 @@ def _write(folder: Path, data: dict) -> None:
 def _patch(folder: Path, **changes) -> None:
     with LOCK:
         data = _read(folder)
+        if data.get("status") in STOPPED_STATES:
+            raise JobCancelled
         data.update(changes)
         _write(folder, data)
+
+
+def _cleanup_deleted_job(folder: Path) -> bool:
+    """Remove files only when no tracked worker can still touch them.
+
+    The caller holds LOCK. A persisted deletion also survives a restart, in
+    which case no workers from the previous process remain alive.
+    """
+    if JOB_FUTURES.get(folder.name):
+        return False
+    saved = load_json(folder / "job.json")
+    if not isinstance(saved, dict) or saved.get("status") != "deleting":
+        return False
+    shutil.rmtree(folder)
+    return True
+
+
+def _task_finished(folder: Path, future: Future) -> None:
+    with LOCK:
+        futures = JOB_FUTURES.get(folder.name)
+        if futures is not None:
+            futures.discard(future)
+            if not futures:
+                JOB_FUTURES.pop(folder.name, None)
+        try:
+            if not JOB_FUTURES.get(folder.name):
+                saved = load_json(folder / "job.json")
+                if isinstance(saved, dict) and saved.get("status") == "canceling":
+                    saved.update(status="canceled",
+                                 canceled_at=datetime.now(timezone.utc).isoformat())
+                    _write(folder, saved)
+            _cleanup_deleted_job(folder)
+        except OSError:
+            LOGGER.exception("Unable to finish deleting job %s", folder.name)
+
+
+def _submit_job_task(folder: Path, pool: ThreadPoolExecutor, fn, *args):
+    """Track queued and running work so cancellation cannot race file removal."""
+    with LOCK:
+        try:
+            job = _read(folder)
+        except FileNotFoundError:
+            # A scheduled publication might have been deleted after the
+            # scheduler released its lock but before its queued submission.
+            return None
+        if job.get("status") in STOPPED_STATES:
+            return None
+        future = pool.submit(fn, *args)
+        if isinstance(future, Future):
+            JOB_FUTURES.setdefault(folder.name, set()).add(future)
+            future.add_done_callback(lambda finished: _task_finished(folder, finished))
+        return future
 
 
 def _create(kind: str, options: Options, label: str) -> tuple[str, Path]:
@@ -359,6 +419,8 @@ def _stage(folder: Path, status: str, progress: int) -> None:
     """Keep already-earned progress during checkpoint recovery."""
     with LOCK:
         job = _read(folder)
+        if job.get("status") in STOPPED_STATES:
+            raise JobCancelled
         job.update(status=status, progress=max(job.get("progress", 0), progress))
         _write(folder, job)
 
@@ -377,7 +439,7 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
     """Resume from persisted media, transcript, AI scores and finished renders."""
     try:
         job = _read(folder)
-        if job["status"] == "completed":
+        if job["status"] == "completed" or job["status"] in STOPPED_STATES:
             return
         opts = Options(**job["options"])
         if opts.narration == "narrated":
@@ -637,10 +699,15 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
             ))
         _patch(folder, status="completed", progress=100, error=None)
         LOGGER.info("ClipForge job %s completed", folder.name)
+    except JobCancelled:
+        LOGGER.info("ClipForge job %s stopped at cancellation checkpoint", folder.name)
     except Exception as exc:
         LOGGER.exception("ClipForge job %s failed", folder.name)
-        _patch(folder, status="failed",
-               error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        try:
+            _patch(folder, status="failed",
+                   error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        except JobCancelled:
+            LOGGER.info("ClipForge job %s was canceled during failure", folder.name)
 
 
 def recover_interrupted_jobs() -> None:
@@ -650,11 +717,19 @@ def recover_interrupted_jobs() -> None:
         try:
             with LOCK:
                 job = _read(folder)
+                if job.get("status") == "deleting":
+                    _cleanup_deleted_job(folder)
+                    continue
+                if job.get("status") == "canceling":
+                    job.update(status="canceled",
+                               canceled_at=datetime.now(timezone.utc).isoformat())
+                    _write(folder, job)
+                    continue
                 if job.get("status") in ACTIVE_STATES:
                     job.update(status="queued", error=None,
                                resume_count=job.get("resume_count", 0) + 1)
                     _write(folder, job)
-                    POOL.submit(_process, folder)
+                    _submit_job_task(folder, POOL, _process, folder)
                     LOGGER.info("Requeued interrupted ClipForge job %s", folder.name)
                 elif job.get("status") == "completed":
                     dirty = False
@@ -686,8 +761,9 @@ def recover_interrupted_jobs() -> None:
                             )
                         else:
                             clip["revision_state"] = "queued"
-                            POOL.submit(
-                                _edit_clip_worker, folder, clip["number"], request,
+                            _submit_job_task(
+                                folder, POOL, _edit_clip_worker,
+                                folder, clip["number"], request,
                             )
                         dirty = True
                     if dirty:
@@ -833,7 +909,7 @@ def submit_url(body: UrlRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     job_id, folder = _create("url", body, url)
-    POOL.submit(_process, folder, None, url)
+    _submit_job_task(folder, POOL, _process, folder, None, url)
     return {"id": job_id, "status": "queued"}
 
 
@@ -882,7 +958,7 @@ def submit_urls_batch(body: BatchUrlRequest):
             shutil.rmtree(folder, ignore_errors=True)
         raise
     for _, folder, url in prepared:
-        POOL.submit(_process, folder, None, url)
+        _submit_job_task(folder, POOL, _process, folder, None, url)
     return {
         "batch_id": batch_id, "job_ids": [item[0] for item in prepared],
         "accepted": len(prepared), "status": "queued",
@@ -973,7 +1049,7 @@ async def submit_upload_batch(
         for item in files:
             await item.close()
     for _, folder, destination in prepared:
-        POOL.submit(_process, folder, destination, None)
+        _submit_job_task(folder, POOL, _process, folder, destination, None)
     return {
         "batch_id": batch_id, "job_ids": [item[0] for item in prepared],
         "accepted": len(prepared), "status": "queued",
@@ -1039,7 +1115,7 @@ async def submit_upload(
         raise
     finally:
         await file.close()
-    POOL.submit(_process, folder, dest, None)
+    _submit_job_task(folder, POOL, _process, folder, dest, None)
     return {"id": job_id, "status": "queued"}
 
 
@@ -1070,6 +1146,8 @@ def _post_copy_worker(folder: Path, number: int, regenerate: bool = False) -> No
     try:
         with LOCK:
             job = _read(folder)
+            if job.get("status") in STOPPED_STATES:
+                raise JobCancelled
             clip = next(c for c in job["clips"] if c["number"] == number)
             clip["post_copy_state"] = "generating"
             _write(folder, job)
@@ -1087,16 +1165,22 @@ def _post_copy_worker(folder: Path, number: int, regenerate: bool = False) -> No
                  else suggest_post_copy(*args))
         with LOCK:
             latest = _read(folder)
+            if latest.get("status") in STOPPED_STATES:
+                raise JobCancelled
             target = next(c for c in latest["clips"] if c["number"] == number)
             target.update(
                 post_copy=draft, post_copy_state="completed", post_copy_error=None,
             )
             _write(folder, latest)
+    except JobCancelled:
+        LOGGER.info("Stopped publishing draft for job %s", folder.name)
     except Exception as exc:
         LOGGER.exception("Clip publishing draft generation failed")
         with LOCK:
             try:
                 job = _read(folder)
+                if job.get("status") in STOPPED_STATES:
+                    return
                 clip = next(c for c in job["clips"] if c["number"] == number)
                 clip.update(post_copy_state="failed",
                             post_copy_error=f"{type(exc).__name__}: {str(exc)[:260]}")
@@ -1122,7 +1206,7 @@ def request_post_copy(job_id: str, number: int, regenerate: bool = False):
             raise HTTPException(409, "Finish the clip revision before writing post copy")
         clip.update(post_copy_state="queued", post_copy_error=None)
         _write(folder, job)
-    POOL.submit(_post_copy_worker, folder, number, regenerate)
+    _submit_job_task(folder, POOL, _post_copy_worker, folder, number, regenerate)
     return {"job_id": job_id, "clip": number, "status": "queued"}
 
 
@@ -1131,7 +1215,9 @@ def list_jobs():
     jobs = []
     for job_file in DATA_DIR.glob("*/job.json"):
         try:
-            jobs.append(_read(job_file.parent))
+            job = _read(job_file.parent)
+            if job.get("status") != "deleting":
+                jobs.append(job)
         except (ValueError, OSError):
             pass
     return sorted(jobs, key=lambda item: item["created_at"], reverse=True)[:250]
@@ -1155,6 +1241,8 @@ def list_batches():
             batch["completed"] += 1
         elif state == "failed":
             batch["failed"] += 1
+        elif state == "canceled":
+            batch["canceled"] = batch.get("canceled", 0) + 1
         elif state == "queued":
             batch["queued"] += 1
         else:
@@ -1185,7 +1273,7 @@ def resume_job(job_id: str):
         job.update(status="queued", error=None,
                    resume_count=job.get("resume_count", 0) + 1)
         _write(folder, job)
-        POOL.submit(_process, folder)
+        _submit_job_task(folder, POOL, _process, folder)
         return {"id": job_id, "status": "queued", "resume_count": job["resume_count"]}
 
 
@@ -1193,6 +1281,31 @@ def resume_job(job_id: str):
 def get_job(job_id: str):
     folder = job_folder(job_id)
     return _read(folder)
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Stop queued work now, and running work at its next safe checkpoint."""
+    with LOCK:
+        folder = job_folder(job_id)
+        job = _read(folder)
+        if job.get("status") in {"canceling", "canceled"}:
+            return {"id": job_id, "status": job["status"]}
+        if job.get("status") not in ACTIVE_STATES:
+            raise HTTPException(409, "Only queued or processing jobs can be canceled")
+        job.update(
+            status="canceling", error=None,
+            cancel_requested_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _write(folder, job)
+        for future in tuple(JOB_FUTURES.get(job_id, ())):
+            future.cancel()
+        if not JOB_FUTURES.get(job_id):
+            job = _read(folder)
+            job.update(status="canceled",
+                       canceled_at=datetime.now(timezone.utc).isoformat())
+            _write(folder, job)
+        return {"id": job_id, "status": _read(folder)["status"]}
 
 
 def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
@@ -1206,6 +1319,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
     try:
         with LOCK:
             job = _read(folder)
+            if job.get("status") in STOPPED_STATES:
+                raise JobCancelled
             clip = next(c for c in job["clips"] if c["number"] == number)
             version = clip.get("revision_count", 0) + 1
             clip["revision_state"] = "rendering"
@@ -1398,6 +1513,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
         # Commit metadata only after a playable final MP4 exists.
         with LOCK:
             current = _read(folder)
+            if current.get("status") in STOPPED_STATES:
+                raise JobCancelled
             target = next(c for c in current["clips"] if c["number"] == number)
             history = target.get("revision_history", [])
             history.append({
@@ -1456,11 +1573,15 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             # Existing ZIP must not return outdated clips after edits.
             (folder / "clipforge-clips.zip").unlink(missing_ok=True)
         LOGGER.info("ClipForge clip %s revision %d complete", number, version)
+    except JobCancelled:
+        LOGGER.info("Stopped clip %s revision in job %s", number, folder.name)
     except Exception as exc:
         LOGGER.exception("ClipForge clip %s revision failed", number)
         with LOCK:
             try:
                 job = _read(folder)
+                if job.get("status") in STOPPED_STATES:
+                    return
                 clip = next(c for c in job["clips"] if c["number"] == number)
                 clip["revision_state"] = "failed"
                 clip["revision_error"] = f"{type(exc).__name__}: {str(exc)[:350]}"
@@ -1559,7 +1680,7 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
             revision_request=body.model_dump(),
         )
         _write(folder, job)
-        POOL.submit(_edit_clip_worker, folder, number, body.model_dump())
+        _submit_job_task(folder, POOL, _edit_clip_worker, folder, number, body.model_dump())
     return {"id": job_id, "clip": number, "state": "queued"}
 
 
@@ -1672,6 +1793,8 @@ def export_job(job_id: str):
 def _publication_update(folder: Path, pub_id: str, **changes) -> None:
     with LOCK:
         job = _read(folder)
+        if job.get("status") in STOPPED_STATES:
+            raise JobCancelled
         for publication in job.get("publications", []):
             if publication["id"] == pub_id:
                 publication.update(changes)
@@ -1685,10 +1808,15 @@ def _publish_worker(folder: Path, pub_id: str, platform: str, path: Path,
         _publication_update(folder, pub_id, state="uploading")
         outcome = publish(platform, path, title, description, visibility)
         _publication_update(folder, pub_id, **outcome)
+    except JobCancelled:
+        LOGGER.info("Stopped local publication tracking for job %s", folder.name)
     except Exception as exc:
         LOGGER.exception("ClipForge publication %s failed", pub_id)
-        _publication_update(folder, pub_id, state="failed",
-                            error=f"{type(exc).__name__}: {str(exc)[:350]}")
+        try:
+            _publication_update(folder, pub_id, state="failed",
+                                error=f"{type(exc).__name__}: {str(exc)[:350]}")
+        except JobCancelled:
+            pass
 
 
 def recover_interrupted_publications() -> None:
@@ -1722,6 +1850,8 @@ def _dispatch_due_publications(now: datetime | None = None) -> int:
         try:
             with LOCK:
                 job = _read(folder)
+                if job.get("status") in STOPPED_STATES:
+                    continue
                 changed = False
                 for pub in job.get("publications", []):
                     if pub.get("state") != "scheduled" or pub.get("approved") is not True:
@@ -1747,7 +1877,7 @@ def _dispatch_due_publications(now: datetime | None = None) -> int:
         except (OSError, ValueError, KeyError):
             LOGGER.warning("Unable to inspect scheduled job %s", folder.name)
     for args in dispatched:
-        PUBLISH_POOL.submit(_publish_worker, *args)
+        _submit_job_task(args[0], PUBLISH_POOL, _publish_worker, *args)
     return len(dispatched)
 
 
@@ -1865,7 +1995,7 @@ def reapprove_publication(job_id: str, pub_id: str, body: ReapproveRequest):
             folder, pub_id, pub["platform"], folder / "clips" / pub["filename"],
             pub["title"], pub.get("description", ""), pub.get("visibility", "private"),
         )
-    PUBLISH_POOL.submit(_publish_worker, *args)
+    _submit_job_task(args[0], PUBLISH_POOL, _publish_worker, *args)
     return {"id": pub_id, "state": "queued"}
 
 
@@ -1923,8 +2053,9 @@ def publish_clip(job_id: str, body: PublishRequest):
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         _write(folder, job)
-    PUBLISH_POOL.submit(
-        _publish_worker, folder, pub_id, body.platform, folder / "clips" / body.filename,
+    _submit_job_task(
+        folder, PUBLISH_POOL, _publish_worker,
+        folder, pub_id, body.platform, folder / "clips" / body.filename,
         body.title, body.description, body.visibility,
     )
     return {"id": pub_id, "state": "queued"}
@@ -2021,14 +2152,18 @@ def delete_analytics_record(record_id: str):
 
 @app.delete("/api/jobs/{job_id}", status_code=204)
 def delete_job(job_id: str):
-    folder = job_folder(job_id)
-    job = _read(folder)
-    if any(c.get("revision_state") in {"queued", "rendering"}
-           for c in job.get("clips", [])):
-        raise HTTPException(409, "Cannot delete a job while a clip revision is running")
-    if job["status"] in {"queued", "downloading", "analyzing", "transcribing",
-                         "selecting", "rendering"} or any(
-        p["state"] in {"queued", "uploading"} for p in job.get("publications", [])
-    ):
-        raise HTTPException(409, "Cannot delete a running job or upload")
-    shutil.rmtree(folder)
+    with LOCK:
+        folder = job_folder(job_id)
+        job = _read(folder)
+        job.update(
+            status="deleting", error=None,
+            deletion_requested_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _write(folder, job)
+        # A running task retains the directory until it returns. Queued tasks
+        # can be canceled immediately; all tasks deregister on completion.
+        for future in tuple(JOB_FUTURES.get(job_id, ())):
+            future.cancel()
+        if not folder.exists() or _cleanup_deleted_job(folder):
+            return Response(status_code=204)
+        return Response(status_code=202)

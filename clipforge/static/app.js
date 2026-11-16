@@ -1369,13 +1369,56 @@ function buildClipEditor(job, clip) {
   return editor;
 }
 
+const processingJobStates = new Set([
+  'queued', 'downloading', 'analyzing', 'transcribing', 'selecting', 'rendering'
+]);
+
+async function cancelProcessingJob(job, button) {
+  if (!confirm('Stop this job? Completed clips and checkpoints will remain until you delete the job.')) return;
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${job.id}/cancel`, {method: 'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Could not cancel job');
+    notify(result.status === 'canceling'
+      ? 'Cancellation requested. Waiting for the current operation to stop.'
+      : 'Job canceled. Saved clips remain until deleted.');
+    await refresh();
+  } catch (error) { notify(error.message); button.disabled = false; }
+}
+
+async function deleteSourceJob(job, button) {
+  const running = processingJobStates.has(job.status) || job.status === 'canceling';
+  const publishing = (job.publications || []).some((pub) =>
+    ['queued', 'uploading'].includes(pub.state));
+  const warning = running
+    ? 'Delete this processing job and all clips? Processing will be canceled first. Files are removed once its current operation exits.'
+    : 'Delete this source and every generated clip? This cannot be undone.';
+  const publicationWarning = publishing
+    ? '\nAn already-started external upload may still complete and cannot be recalled.' : '';
+  if (!confirm(warning + publicationWarning)) return;
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${job.id}`, {method: 'DELETE'});
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.detail || 'Could not delete job');
+    }
+    selectedLibraryClip = null;
+    notify(response.status === 202
+      ? 'Deletion requested. Files will be removed when active work stops.'
+      : 'Job and files deleted.');
+    await refresh();
+  } catch (error) { notify(error.message); button.disabled = false; }
+}
+
 function card(job, mode = currentPage) {
   const wrapper = el('article', mode === 'library' ? 'job library-job' : 'job');
   const head = el('div', 'job-head');
   const meta = el('div');
   const progress = Number.isFinite(Number(job.progress))
     ? Math.min(100, Math.max(0, Math.round(Number(job.progress)))) : 0;
-  const inProgress = !['completed', 'failed'].includes(job.status);
+  const inProgress = processingJobStates.has(job.status);
   meta.append(el('h3', '', job.label), el('p', '', `${new Date(job.created_at).toLocaleString()} · ${job.options.aspect_ratio} · ${job.options.clip_seconds}s · ${job.options.selection_mode === 'ai' ? 'AI selected' : 'Audio-energy selected'}${job.resume_count ? ' · resumed ' + job.resume_count + 'x' : ''}`));
   if (mode === 'library' && job.clips[0]?.thumbnail) {
     const cover = el('img', 'library-project-thumb');
@@ -1392,6 +1435,10 @@ function card(job, mode = currentPage) {
   if (job.batch_id)
     wrapper.append(el('span', 'clip-tag', 'Batch source ' + job.batch_index + '/' + job.batch_total));
   if (job.status === 'failed') wrapper.append(el('p', 'error', job.error || 'This job failed.'));
+  if (job.status === 'canceling') wrapper.append(el('p', 'job-canceled-note',
+    'Stopping the current operation. You can also delete this job now.'));
+  if (job.status === 'canceled') wrapper.append(el('p', 'job-canceled-note',
+    'Processing canceled. Saved clips and checkpoints remain until you delete this job.'));
   if (inProgress) {
     const bar = el('div', 'progress-bg');
     bar.setAttribute('role', 'progressbar');
@@ -1844,8 +1891,14 @@ function card(job, mode = currentPage) {
       wrapper.append(gallery);
     } else wrapper.append(grid);
   }
-  if (job.status === 'completed' || job.status === 'failed') {
+  if (inProgress || ['completed', 'failed', 'canceling', 'canceled'].includes(job.status)) {
     const actions = el('div', 'job-actions');
+    if (inProgress) {
+      const cancel = el('button', 'cancel-job', 'Cancel job');
+      cancel.type = 'button';
+      cancel.addEventListener('click', () => cancelProcessingJob(job, cancel));
+      actions.append(cancel);
+    }
     if (job.status === 'failed') {
       const resume = el('button', 'resume-job', '↻ Resume job');
       resume.title = 'Reuse saved source, transcript, scores and completed clips';
@@ -1861,12 +1914,9 @@ function card(job, mode = currentPage) {
       });
       actions.append(resume);
     }
-    const remove = el('button', '', 'Delete job');
-    remove.addEventListener('click', async () => {
-      if (!confirm('Delete this job and all generated files?')) return;
-      const res = await fetch(`/api/jobs/${job.id}`, {method: 'DELETE'});
-      if (res.ok) refresh();
-    });
+    const remove = el('button', 'delete-job', 'Delete job');
+    remove.type = 'button';
+    remove.addEventListener('click', () => deleteSourceJob(job, remove));
     actions.append(remove);
     wrapper.append(actions);
   }
@@ -1899,7 +1949,7 @@ function libraryEntries() {
     }));
     if (!clips.length || job.status !== 'completed') clips.push({
       key: job.id + ':job', job, clip: null,
-      status: job.status === 'failed' ? 'failed' :
+      status: ['failed', 'canceled'].includes(job.status) ? job.status :
         job.status === 'completed' ? 'ready' : 'processing'
     });
     return clips;
@@ -1923,7 +1973,9 @@ function libraryImage(entry, className = '') {
     img.loading = 'lazy';
     media.append(img);
   } else media.append(el('span', 'media-library-no-thumb', entry.clip ? 'Video' :
-    entry.status === 'failed' ? 'No preview' : 'In progress'));
+    entry.status === 'failed' ? 'No preview' :
+      entry.status === 'canceled' ? 'Canceled' :
+        entry.job.status === 'canceling' ? 'Stopping' : 'In progress'));
   if (entry.clip) media.append(el('span', 'media-library-duration', libraryTimestamp(entry.clip.duration)));
   return media;
 }
@@ -1943,7 +1995,8 @@ function libraryStatusLabel(entry) {
     fill.style.width = `${percent}%`;
     bar.append(fill);
     status.append(bar);
-  } else status.append(el('span', '', entry.status === 'ready' ? 'Ready' : 'Failed'));
+  } else status.append(el('span', '', entry.status === 'ready' ? 'Ready' :
+    entry.status === 'canceled' ? 'Canceled' : 'Failed'));
   return status;
 }
 
@@ -2072,6 +2125,12 @@ function buildLibraryAiAssistant(job, clip) {
 
 function libraryJobActions(job) {
   const actions = el('div', 'media-library-source-actions');
+  if (processingJobStates.has(job.status)) {
+    const cancel = el('button', 'media-library-secondary', 'Cancel processing');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => cancelProcessingJob(job, cancel));
+    actions.append(cancel);
+  }
   if (job.status === 'failed') {
     const retry = el('button', 'media-library-secondary', 'Resume job');
     retry.addEventListener('click', async () => {
@@ -2086,17 +2145,10 @@ function libraryJobActions(job) {
     });
     actions.append(retry);
   }
-  if (job.status === 'completed' || job.status === 'failed') {
-    const remove = el('button', 'media-library-danger', 'Delete source');
-    remove.addEventListener('click', async () => {
-      if (!confirm('Delete this source and every generated clip?')) return;
-      const response = await fetch(`/api/jobs/${job.id}`, {method: 'DELETE'});
-      if (!response.ok) return notify('Could not delete this source.');
-      selectedLibraryClip = null;
-      await refresh();
-    });
-    actions.append(remove);
-  }
+  const remove = el('button', 'media-library-danger', 'Delete source');
+  remove.type = 'button';
+  remove.addEventListener('click', () => deleteSourceJob(job, remove));
+  actions.append(remove);
   return actions;
 }
 
@@ -2305,7 +2357,11 @@ function renderLibraryReview(entries, target) {
   } else {
     const pending = el('div', 'media-library-awaiting');
     pending.append(el('h2', '', libraryName(selected)), libraryStatusLabel(selected),
-      el('p', '', selected.job.error || 'Your clip will appear here as soon as it is ready.'));
+      el('p', '', selected.job.status === 'canceled'
+        ? 'This job was canceled. Any completed clips remain available; delete the source to remove all files.'
+        : selected.job.status === 'canceling'
+        ? 'Stopping the current operation. You may delete this source now; cleanup follows when the worker exits.'
+        : selected.job.error || 'Your clip will appear here as soon as it is ready.'));
     detail.append(pending);
   }
   detail.append(libraryJobActions(selected.job));
@@ -2320,7 +2376,7 @@ function renderLibrary() {
   const all = libraryEntries();
   $('library-total-clips').textContent = String(all.filter((entry) => entry.clip).length);
   $('library-total-sources').textContent = String(libraryJobs.length);
-  for (const status of ['all', 'ready', 'processing', 'failed']) {
+  for (const status of ['all', 'ready', 'processing', 'failed', 'canceled']) {
     const count = status === 'all' ? all.length :
       all.filter((entry) => entry.status === status).length;
     document.querySelector(`[data-library-count="${status}"]`).textContent = String(count);
@@ -2410,14 +2466,17 @@ async function refresh() {
       } else target.append(...shown.map((job) => card(job, currentPage)));
     }
     if (currentPage === 'activity') {
-      const working = jobs.filter((job) => !['failed', 'completed'].includes(job.status));
+      const working = jobs.filter((job) =>
+        processingJobStates.has(job.status) || job.status === 'canceling');
       const completed = jobs.filter((job) => job.status === 'completed');
       const failed = jobs.filter((job) => job.status === 'failed');
+      const canceled = jobs.filter((job) => job.status === 'canceled');
       const parent = $('activity-stats');
       parent.replaceChildren();
       for (const [value, label] of [
         [working.length, 'In progress'], [completed.length, 'Completed'],
-        [failed.length, 'Needs attention'], [jobs.length, 'Total jobs']
+        [failed.length, 'Needs attention'], [canceled.length, 'Canceled'],
+        [jobs.length, 'Total jobs']
       ]) {
         const item = el('div', 'stat-item');
         item.append(el('strong', '', String(value)), el('span', '', label));
@@ -2429,10 +2488,12 @@ async function refresh() {
       for (const job of jobs) {
         if (!job.batch_id) continue;
         if (!batches.has(job.batch_id))
-          batches.set(job.batch_id, {total: job.batch_total || 0, completed: 0, failed: 0});
+          batches.set(job.batch_id, {total: job.batch_total || 0, completed: 0,
+            failed: 0, canceled: 0});
         const record = batches.get(job.batch_id);
         if (job.status === 'completed') record.completed++;
         if (job.status === 'failed') record.failed++;
+        if (job.status === 'canceled') record.canceled++;
       }
       const group = $('activity-batches');
       group.replaceChildren();
@@ -2440,7 +2501,8 @@ async function refresh() {
         const item = el('div', 'batch-summary-item');
         item.append(el('strong', '', 'Batch ' + id.slice(0, 8)),
                     el('span', '', record.completed + '/' + record.total + ' completed · ' +
-                       record.failed + ' need attention'));
+                       record.failed + ' need attention · ' +
+                       record.canceled + ' canceled'));
         group.append(item);
       }
     }
