@@ -220,6 +220,9 @@ function markSplitCustom() { selectedSplitPreset = null; }
 
 function renderFraming() {
   const split = $('framing').value === 'split';
+  const outputRatio = split ? '9:16' : $('aspect-ratio').value;
+  ClipForgeMedia.applyPreset($('portrait-preview'), outputRatio);
+  $('preview-aspect-label').textContent = `${outputRatio} · ${split ? 'Split preview' : 'Output guide'}`;
   $('split-selection').hidden = !split;
   $('split-controls').hidden = !split;
   $('framing-presets').hidden = !split;
@@ -354,14 +357,19 @@ function loadSourcePreview() {
   }
   $('framing-empty').hidden = Boolean(previewObjectUrl || urlPreview);
   $('framing-source-label').textContent = previewObjectUrl ? files[0].name : urlPreview
-    ? 'YouTube player · first URL in batch if provided'
+    ? previewYoutube.isShort
+      ? 'YouTube Shorts preview · 9:16 guide only (actual ratio available after import)'
+      : 'YouTube player · original dimensions available after import'
     : 'Select a file or load a supported YouTube link';
+  $('framing-source').dataset.sourceLabel = $('framing-source-label').textContent;
   $('portrait-preview-note').textContent = urlPreview
     ? 'Still YouTube thumbnail crop guide only, not a synchronized video preview. Final framing uses downloaded footage; verify it in the Library timeline.'
     : previewObjectUrl
       ? 'Use the original video controls to play, pause or scrub. Both vertical panes follow the same time. FFmpeg renders the selected ratio and boxes on export.'
       : 'Choose a local video for synchronized playback. Final exports use full-resolution FFmpeg rendering.';
-  $('framing-stage').style.aspectRatio = '16 / 9';
+  $('framing-stage').style.removeProperty('--media-aspect');
+  delete $('framing-stage').dataset.mediaOrientation;
+  if (urlPreview && previewYoutube.isShort) ClipForgeMedia.applyPreset($('framing-stage'), '9:16');
   renderFraming();
 }
 
@@ -378,8 +386,12 @@ for (const id of ['url', 'url-list']) {
 
 $('framing-source').addEventListener('loadedmetadata', () => {
   const source = $('framing-source');
-  if (source.videoWidth && source.videoHeight) {
-    $('framing-stage').style.aspectRatio = `${source.videoWidth} / ${source.videoHeight}`;
+  const measured = ClipForgeMedia.dimensions(source.videoWidth, source.videoHeight);
+  if (measured) {
+    $('framing-stage').style.setProperty('--media-aspect', String(measured.ratio));
+    $('framing-stage').dataset.mediaOrientation = measured.orientation;
+    $('framing-source-label').textContent =
+      `${source.dataset.sourceLabel || 'Source'} · ${measured.label} (${measured.width} × ${measured.height})`;
     splitBoxes = splitBoxes.map((box, i) => fitSplitBox(box, i));
     for (const i of [0, 1]) $(`split-zoom-${i}`).value = Math.round(splitBoxes[i].width * 100);
     renderFraming();
@@ -780,13 +792,16 @@ function buildClipEditor(job, clip) {
   sourceVideo.controls = true;
   sourceVideo.preload = 'metadata';
   sourceVideo.src = `/api/jobs/${job.id}/source`;
+  const monitorRatio = el('p', 'media-video-meta media-video-meta-inline',
+    'Reading source dimensions…');
+  ClipForgeMedia.observe(sourceVideo, {label: monitorRatio});
   const monitorHelp = el('p', 'helper-note',
     'Source monitor · scrubbing previews the original footage before a new render.');
   sourceVideo.addEventListener('error', () => {
     monitorHelp.textContent = 'Original source preview is unavailable in this browser. ' +
       'Keep using the numerical trim controls; the source file remains on the server.';
   });
-  monitor.append(sourceVideo, monitorHelp);
+  monitor.append(sourceVideo, monitorRatio, monitorHelp);
   const tracks = el('div', 'timeline-tracks');
   const time = (seconds) => {
     const value = Math.max(0, Number(seconds) || 0);
@@ -1409,6 +1424,13 @@ function card(job, mode = currentPage) {
       const description = el('div', 'clip-info');
       const media = el('div', 'clip-media');
       media.append(video);
+      const playbackRatio = el('span', 'media-video-meta',
+        `Export ${clip.aspect_ratio || job.options.aspect_ratio || 'unknown'}`);
+      ClipForgeMedia.observe(video, {
+        stage: video, label: playbackRatio,
+        preset: clip.aspect_ratio || job.options.aspect_ratio
+      });
+      media.append(playbackRatio);
       const clipNumber = String(clip.number).padStart(2, '0');
       const startTime = `${Math.floor(clip.start / 60)}:${String(Math.floor(clip.start % 60)).padStart(2, '0')}`;
       if (mode === 'library') {
@@ -1884,6 +1906,8 @@ function libraryName(entry) {
 
 function libraryImage(entry, className = '') {
   const media = el('div', 'media-library-thumb ' + className);
+  if (entry.clip) ClipForgeMedia.applyPreset(media,
+    entry.clip.aspect_ratio || entry.job.options?.aspect_ratio);
   if (entry.clip?.thumbnail) {
     const img = el('img');
     img.src = `/api/jobs/${entry.job.id}/clips/${entry.clip.thumbnail}`;
@@ -2125,7 +2149,8 @@ function renderLibraryList(entries, target) {
     titleCell.append(preview, titleText);
     const source = el('span', 'media-library-truncate', librarySource(entry.job));
     source.title = entry.job.label || '';
-    const aspect = el('span', '', entry.clip?.aspect_ratio || entry.job.options?.aspect_ratio || '—');
+    const aspect = el('span', '', entry.clip
+      ? `Export ${entry.clip.aspect_ratio || entry.job.options?.aspect_ratio || '—'}` : '—');
     const duration = el('span', '', entry.clip ? libraryTimestamp(entry.clip.duration) : '—');
     const date = el('span', '', new Date(entry.job.created_at).toLocaleDateString());
     const actions = el('div', 'media-library-row-actions');
@@ -2144,7 +2169,15 @@ function renderLibraryList(entries, target) {
         video.preload = 'metadata';
         video.src = `/api/jobs/${entry.job.id}/clips/${entry.clip.filename}`;
         if (entry.clip.thumbnail) video.poster = `/api/jobs/${entry.job.id}/clips/${entry.clip.thumbnail}`;
-        details.append(video);
+        const player = el('div', 'media-library-list-player');
+        const ratioLabel = el('span', 'media-video-meta media-video-meta-inline',
+          `Export ${entry.clip.aspect_ratio || entry.job.options?.aspect_ratio || 'unknown'}`);
+        ClipForgeMedia.observe(video, {
+          label: ratioLabel, preset: entry.clip.aspect_ratio || entry.job.options?.aspect_ratio,
+          onSize: (size) => { aspect.textContent = size.label; }
+        });
+        player.append(video, ratioLabel);
+        details.append(player);
         const info = el('div');
         info.append(el('h3', '', libraryName(entry)),
           el('p', '', `Start ${libraryTimestamp(entry.clip.start)} · ${entry.clip.aspect_ratio || entry.job.options?.aspect_ratio || '9:16'} · ${libraryTimestamp(entry.clip.duration)}`));
@@ -2195,7 +2228,16 @@ function renderLibraryReview(entries, target) {
     video.preload = 'metadata';
     video.src = `/api/jobs/${selected.job.id}/clips/${selected.clip.filename}`;
     if (selected.clip.thumbnail) video.poster = `/api/jobs/${selected.job.id}/clips/${selected.clip.thumbnail}`;
-    stage.append(video);
+    const playbackLabel = el('span', 'media-video-meta',
+      `Export ${selected.clip.aspect_ratio || selected.job.options?.aspect_ratio || 'unknown'}`);
+    const actualDimensions = el('dd', '', 'Reading playback dimensions…');
+    ClipForgeMedia.observe(video, {
+      stage, label: playbackLabel,
+      preset: selected.clip.aspect_ratio || selected.job.options?.aspect_ratio,
+      onSize: (size) => { actualDimensions.textContent =
+        `${size.label} · ${size.width} × ${size.height}`; }
+    });
+    stage.append(video, playbackLabel);
     detail.append(stage);
     const intro = el('div', 'media-library-review-intro');
     const title = el('div');
@@ -2212,9 +2254,10 @@ function renderLibraryReview(entries, target) {
       ['Source', librarySource(selected.job)],
       ['Start point', libraryTimestamp(selected.clip.start)],
       ['Duration', libraryTimestamp(selected.clip.duration)],
-      ['Aspect ratio', selected.clip.aspect_ratio || selected.job.options?.aspect_ratio || '—'],
+      ['Export setting', selected.clip.aspect_ratio || selected.job.options?.aspect_ratio || '—'],
       ['Selection', selected.clip.reason || 'Highlight selected from the source video']
     ]) metadata.append(el('dt', '', key), el('dd', '', value));
+    metadata.append(el('dt', '', 'Actual playback'), actualDimensions);
     detail.append(metadata);
     const attributes = [
       selected.clip.captions_added && 'Captions',

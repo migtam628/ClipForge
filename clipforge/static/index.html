@@ -12,6 +12,7 @@
   <title>ClipForge Studio</title>
   <link rel="stylesheet" href="/assets/style.css">
   <link rel="stylesheet" href="/assets/themes.css">
+  <link rel="stylesheet" href="/assets/workspace-refresh.css">
 </head>
 <body>
 <div class="shell">
@@ -50,12 +51,13 @@
     <div class="main-content">
 
       <section id="view-studio" class="page-view">
-        <div class="eyebrow">STUDIO / NEW PROJECT</div>
-        <h1>Create clips</h1>
-        <p class="lede">Import footage, choose your framing and style, then review the finished clips before publishing.</p>
-        <div class="eyebrow">CREATOR WORKSPACE <span class="accent-spark">✦</span></div>
-        <h1>From long-form to <span>scroll-stopping.</span></h1>
-        <p class="lede">Turn long videos into publish-ready clips with smart framing, accurate speech captions, scene-aware text, and optional story voiceovers.</p>
+        <header class="workspace-hero studio-hero">
+          <div><div class="eyebrow">STUDIO <span class="workspace-breadcrumb">/ NEW PROJECT</span></div>
+            <h1>Make the moment <span>matter.</span></h1>
+            <p class="lede">Start with long-form footage. Find the strongest moments, refine the framing, and make clips worth sharing.</p>
+          </div>
+          <div class="studio-hero-aside" aria-label="Studio workflow"><span class="studio-hero-aside-mark" aria-hidden="true">✳</span><strong>Four steps. One workflow.</strong><span>Import <b>·</b> Frame <b>·</b> Style <b>·</b> Create</span></div>
+        </header>
         <section class="creator-panel" aria-label="Create clips">
           <nav class="studio-journey" aria-label="Clip creation steps">
             <button type="button" class="journey-step is-active" data-journey="0" aria-current="step"><span>1</span> Your video</button>
@@ -74,7 +76,7 @@
           <div class="journey-tip">Your source stays private on this server. URL imports depend on the video host allowing a download; uploading your own MP4 is the most reliable option.</div>
           </div>
           <div class="journey-panel" data-journey-panel="1" hidden>
-            <div class="panel-heading"><span class="step">02</span><div><h2>Frame the moment</h2><p>Choose how your footage fits vertical video. For reactions, drag each crop box to frame both people.</p></div></div>
+            <div class="panel-heading"><span class="step">02</span><div><h2>Frame the moment</h2><p>Local source players follow the original video dimensions; YouTube guides are approximate until import. Exports use your chosen ratio. Drag crop boxes to frame both people.</p></div></div>
             <div class="framing-layouts" role="group" aria-label="Framing layout">
               <button type="button" class="framing-choice is-chosen" data-framing="smart"><strong>Auto focus</strong><small>Follow faces where detectable</small></button>
               <button type="button" class="framing-choice" data-framing="split"><strong>Split in two</strong><small>Reaction / interview · stacked</small></button>
@@ -105,7 +107,7 @@
                 </div>
               </div>
               <div class="framing-card portrait-card">
-                <div class="framing-card-head"><strong>Vertical result</strong><span>9:16 preview</span></div>
+                <div class="framing-card-head"><strong>Output framing guide</strong><span id="preview-aspect-label">9:16 · Vertical</span></div>
                 <div class="portrait-preview" id="portrait-preview">
                   <div class="portrait-pane"><div class="portrait-crop-surface" id="portrait-surface-a"><video id="portrait-video-a" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-a" alt="Still thumbnail crop guide for the first pane" hidden></div><span class="portrait-placeholder">Your clip</span></div>
                   <div class="portrait-pane"><div class="portrait-crop-surface" id="portrait-surface-b"><video id="portrait-video-b" playsinline muted loop preload="metadata" hidden></video><img id="portrait-image-b" alt="Still thumbnail crop guide for the second pane" hidden></div><span class="portrait-placeholder">Framing preview</span></div>
@@ -396,7 +398,7 @@
         </div>
       </section>
 
-      <footer>ClipForge · Private short-form studio · AI editing + narrator + creator-approved publishing</footer>
+      <footer>ClipForge · Private creative workspace · AI-assisted editing + creator-approved publishing</footer>
     </div>
   </main>
 </div>
@@ -422,6 +424,7 @@
 <script src="/assets/theme.js" defer></script>
 <script src="/assets/env-settings.js" defer></script>
 <script src="/assets/preview-url.js" defer></script>
+<script src="/assets/media-geometry.js" defer></script>
 <script src="/assets/app.js" defer></script>
 <script src="/assets/analytics.js" defer></script>
 </body>

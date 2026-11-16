@@ -29,6 +29,7 @@
     if (!/^[a-zA-Z0-9_-]{11}$/.test(id || '')) return null;
     return {
       id,
+      isShort: youtubeHosts.has(host) && url.pathname.split('/').filter(Boolean)[0] === 'shorts',
       embedUrl: `https://www.youtube-nocookie.com/embed/${id}?rel=0`,
       thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`
     };

@@ -82,5 +82,9 @@ for (const [url, expected] of Object.entries(cases)) {
     throw Error('Unexpected preview conversion: ' + url);
   }
 }
+const shorts = parseYouTubePreview('https://www.youtube.com/shorts/tbFiFLBI-mQ');
+if (!shorts.isShort) throw Error('Shorts URL must use the vertical guide');
+const watch = parseYouTubePreview('https://www.youtube.com/watch?v=tbFiFLBI-mQ');
+if (watch.isShort) throw Error('Watch URLs must not claim a vertical source');
 '''
     subprocess.run(['node', '-e', script, str(source), json.dumps(cases)], check=True)
