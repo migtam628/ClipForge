@@ -37,18 +37,18 @@ def crop_follow_path(
     centers: list[tuple[float, float, float]],
     frame_width: int, frame_height: int,
     out_width: int = 720, out_height: int = 1280,
-    step: float = 0.2,
+    step: float = 0.05,
 ) -> list[tuple[float, int, int]]:
     """Smooth two-axis subject centers into continuous crop movement.
 
     The crop always fits the actual export aspect ratio. Sparse detections are
-    smoothed and interpolated at 5 Hz so playback does not jump per sample.
+    smoothed and interpolated at 20 Hz so playback does not jump per sample.
     Clip lengths and the number of samples are already bounded by the caller.
     """
     if min(frame_width, frame_height, out_width, out_height) <= 0:
         return []
-    if not math.isfinite(step) or not 0.1 <= step <= 1.0:
-        raise ValueError("Tracking step must be between 0.1 and 1 second")
+    if not math.isfinite(step) or not 0.04 <= step <= 1.0:
+        raise ValueError("Tracking step must be between 0.04 and 1 second")
     scale = max(out_width / frame_width, out_height / frame_height)
     scaled_width = math.ceil(frame_width * scale)
     scaled_height = math.ceil(frame_height * scale)

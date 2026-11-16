@@ -70,7 +70,7 @@ background in addition to centered crop and padding. Smart tracking samples at
 most 48 frames per clip with OpenCV's CPU Haar face detector, chooses a stable
 face where possible, and moves the FFmpeg crop horizontally **and vertically**
 according to the actual output dimensions. It interpolates the smoothed path at
-five updates per second, so playback pans smoothly rather than jumping between
+20 updates per second, so playback pans smoothly rather than jumping between
 detections. Missing detections hold the last subject position; if a face cannot
 be confirmed in at least two sampled frames, the renderer safely falls back to
 centered framing.

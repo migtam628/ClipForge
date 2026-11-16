@@ -41,11 +41,12 @@ def test_subject_follow_moves_both_axes_without_jumps():
         [(0, .1, .2), (1, .85, .8), (2, .95, .9)],
         1920, 1080, 720, 1280,
     )
-    assert len(horizontal) >= 11
+    assert len(horizontal) >= 40
     assert horizontal[0][0] == 0
     assert len({x for _, x, _ in horizontal}) > 1
     assert {y for _, _, y in horizontal} == {0}
     assert max(abs(a[1] - b[1]) for a, b in zip(horizontal, horizontal[1:])) < 250
+    assert max(b[0] - a[0] for a, b in zip(horizontal, horizontal[1:])) <= 0.06
 
     # Tall input to wide output: camera should pan vertically, not horizontally.
     vertical = crop_follow_path(
