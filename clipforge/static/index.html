@@ -35,7 +35,8 @@
   </aside>
   <main>
     <header class="topbar">
-      <div>Workspace <span class="crumb-sep">/</span> <b id="page-crumb">Studio</b></div>
+      <div class="desktop-breadcrumb">Workspace <span class="crumb-sep">/</span> <b id="page-crumb">Studio</b></div>
+      <div class="mobile-header"><a class="mobile-header-brand" href="/studio" aria-label="ClipForge home">clipforge<span>.</span></a><span id="mobile-page-title">Studio</span></div>
       <div class="top-actions">
         <label class="appearance-picker" for="appearance-theme"><span aria-hidden="true">◐</span><span class="appearance-label">Appearance</span>
           <select id="appearance-theme" data-theme-select aria-label="Appearance theme">
@@ -49,6 +50,9 @@
     <div class="main-content">
 
       <section id="view-studio" class="page-view">
+        <div class="eyebrow">STUDIO / NEW PROJECT</div>
+        <h1>Create clips</h1>
+        <p class="lede">Import footage, choose your framing and style, then review the finished clips before publishing.</p>
         <div class="eyebrow">CREATOR WORKSPACE <span class="accent-spark">✦</span></div>
         <h1>From long-form to <span>scroll-stopping.</span></h1>
         <p class="lede">Turn long videos into publish-ready clips with smart framing, accurate speech captions, scene-aware text, and optional story voiceovers.</p>
@@ -179,7 +183,7 @@
 
       <section id="view-library" class="page-view" hidden>
         <div class="page-heading library-heading">
-          <div><div class="eyebrow">YOUR CREATIVE ARCHIVE</div><h1>Clip <span>Library.</span></h1><p class="lede">Everything you've created, organized by source. Preview, refine, and download your best moments.</p></div>
+          <div><div class="eyebrow">MEDIA</div><h1>Library</h1><p class="lede">Preview, edit, and organize finished clips by source video.</p></div>
           <a class="small-action primary-action" href="/studio">✦ Create clips</a>
         </div>
         <div class="library-overview" id="library-metrics" aria-label="Library overview">
@@ -200,7 +204,7 @@
       </section>
 
       <section id="view-publishing" class="page-view" hidden>
-        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION CENTER</div><h1>Publish with <span>control.</span></h1><p class="lede">Review a clip, send immediately with approval, or explicitly schedule one or more configured platforms. TikTok receives a draft for final review.</p></div><a class="small-action" href="/posting-settings">⚙ Posting settings</a></div>
+        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION</div><h1>Publishing</h1><p class="lede">Review posts, choose your channels, or schedule approved clips. TikTok receives drafts for final review.</p></div><a class="small-action" href="/posting-settings">Posting settings</a></div>
         <div id="platform-connections" class="connection-grid"></div>
         <div class="section-toolbar"><strong id="publishing-scheduled-count">Loading scheduled transfers…</strong><span>Scheduled transfers survive server restarts.</span></div>
         <div class="section-toolbar"><span>Ready to review &amp; share</span><button class="refresh" type="button" data-refresh>↻ Refresh</button></div>
@@ -208,7 +212,7 @@
       </section>
 
       <section id="view-posting-settings" class="page-view" hidden>
-        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION PREFERENCES</div><h1>Posting <span>settings.</span></h1><p class="lede">Manage social platform targets, channel-ready templates and visibility separately from editing preferences. Saved presets are available when publishing and scheduling clips.</p></div><a class="small-action" href="/publishing">↗ Go to Publishing</a></div>
+        <div class="page-heading"><div><div class="eyebrow">DISTRIBUTION / PREFERENCES</div><h1>Posting settings</h1><p class="lede">Set up channel profiles, platform targets and saved posting presets.</p></div><a class="small-action" href="/publishing">Go to Publishing</a></div>
         <div class="section-toolbar"><strong>Platform connections</strong><span>Credentials remain on the private server; they never appear here.</span></div>
         <div id="posting-platform-connections" class="connection-grid" aria-live="polite"></div>
         <div class="posting-settings-grid">
@@ -230,7 +234,7 @@
       </section>
 
       <section id="view-activity" class="page-view" hidden>
-        <div class="page-heading"><div><div class="eyebrow">PROCESSING HISTORY</div><h1>Queue &amp; <span>Activity.</span></h1><p class="lede">Track transcription, highlight scoring, rendering and recovery, with detailed failure reasons and one-click resume.</p></div><button class="small-action" data-refresh type="button">↻ Refresh queue</button></div>
+        <div class="page-heading"><div><div class="eyebrow">PROCESSING / JOBS</div><h1>Activity</h1><p class="lede">Check job progress, troubleshoot errors, and resume interrupted work.</p></div><button class="small-action" data-refresh type="button">Refresh queue</button></div>
         <div class="stats-row" id="activity-stats"></div>
         <div id="activity-batches" class="batch-summary"></div>
         <div id="jobs-activity" class="jobs"></div>
@@ -239,8 +243,8 @@
       <section id="view-analytics" class="page-view" hidden>
         <div class="page-heading">
           <div>
-            <div class="eyebrow">CREATOR PERFORMANCE</div>
-            <h1>Content &amp; <span>Earnings.</span></h1>
+            <div class="eyebrow">PERFORMANCE</div>
+            <h1>Analytics</h1>
             <p class="lede">Track posted clips, engagement, campaign approvals and actual payouts—without inventing views or earnings.</p>
           </div>
           <a class="small-action primary-action" href="/api/analytics/export">⇩ Export records (CSV)</a>
@@ -311,7 +315,7 @@
       </section>
 
       <section id="view-settings" class="page-view" hidden>
-        <div class="eyebrow">PERSONALIZE YOUR WORKFLOW</div><h1>Studio <span>settings.</span></h1>
+        <div class="eyebrow">WORKSPACE / PREFERENCES</div><h1>Settings</h1>
         <p class="lede">Customize your look, workflow and connected services. Your media stays on your private server.</p>
         <section class="settings-card appearance-settings" aria-labelledby="appearance-heading">
           <div class="settings-heading"><div><h2 id="appearance-heading">Appearance &amp; Layout</h2>
@@ -390,6 +394,25 @@
     </div>
   </main>
 </div>
+<nav class="mobile-bottom-nav" aria-label="Mobile workspace navigation">
+  <a class="mobile-nav-link" data-page="studio" href="/studio"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/></svg><span>Studio</span></a>
+  <a class="mobile-nav-link" data-page="library" href="/library"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="8" height="7" rx="1"/><rect x="13" y="4" width="8" height="7" rx="1"/><rect x="3" y="13" width="8" height="7" rx="1"/><rect x="13" y="13" width="8" height="7" rx="1"/></svg><span>Library</span></a>
+  <a class="mobile-nav-link" data-page="publishing" href="/publishing"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7 8m5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg><span>Publish</span></a>
+  <a class="mobile-nav-link" data-page="activity" href="/activity"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
+  <button class="mobile-nav-link" type="button" id="mobile-more-button" aria-controls="mobile-more-dialog" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>More</span></button>
+</nav>
+<dialog id="mobile-more-dialog" class="mobile-more-dialog" aria-labelledby="mobile-more-title">
+  <div class="mobile-more-heading"><div><small>WORKSPACE</small><h2 id="mobile-more-title">More options</h2></div><button type="button" id="mobile-more-close" class="mobile-more-close" aria-label="Close menu">×</button></div>
+  <nav class="mobile-more-links" aria-label="Other workspace pages">
+    <a class="mobile-more-link" data-page="posting-settings" href="/posting-settings"><span>Posting settings</span><span aria-hidden="true">↗</span></a>
+    <a class="mobile-more-link" data-page="analytics" href="/analytics"><span>Analytics</span><span aria-hidden="true">↗</span></a>
+    <a class="mobile-more-link" data-page="settings" href="/settings"><span>App settings</span><span aria-hidden="true">↗</span></a>
+    <a class="mobile-more-link" href="/api/docs" target="_blank" rel="noopener"><span>API reference</span><span aria-hidden="true">↗</span></a>
+  </nav>
+  <label class="mobile-appearance-label" for="mobile-appearance-theme">Appearance</label>
+  <select id="mobile-appearance-theme" data-theme-select aria-label="Mobile appearance theme"><option value="precision">Precision Studio</option><option value="editorial">Editorial Canvas</option><option value="control">Control Deck</option></select>
+  <p class="mobile-more-footnote">ClipForge is hosted on your private server.</p>
+</dialog>
 <script src="/assets/theme.js" defer></script>
 <script src="/assets/env-settings.js" defer></script>
 <script src="/assets/preview-url.js" defer></script>
