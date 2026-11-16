@@ -1,6 +1,6 @@
 """Model-independent AI logic and real media processing integration tests."""
-import subprocess
 import json
+import subprocess
 from io import BytesIO
 
 import pytest
