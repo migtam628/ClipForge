@@ -179,6 +179,13 @@ def inspect_rendered_clip(
         review.append("video_frame_sampling_incomplete")
     if candidate.get("script_fallbacks", 0) > 0:
         review.append("script_contains_source_excerpts_after_ai_timeout")
+    known_script_flags = {
+        "repeated_ai_script_phrases",
+        "incomplete_ai_script_phrase",
+        "context_repeats_spoken_dialogue",
+    }
+    review.extend(flag for flag in (candidate.get("script_review_flags") or [])
+                  if isinstance(flag, str) and flag in known_script_flags)
     score = candidate.get("score")
     if isinstance(score, (float, int)) and not isinstance(score, bool) and score < 6:
         review.append("weak_highlight_score")

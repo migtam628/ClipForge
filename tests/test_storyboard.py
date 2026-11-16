@@ -320,7 +320,7 @@ def test_cpu_script_timeout_uses_only_source_excerpts_with_review_metadata(
     assert output["script_fallbacks"] == 2
     assert output["frame_samples"] == 2
     assert output["script"] == (
-        "A technician opens a control panel. A technician opens a control panel."
+        "A technician opens a control panel.\nA technician opens a control panel."
     )
     assert all(b["generation"] == "source_excerpt" for b in output["beats"])
     assert all(b["text"] == "A technician opens a control panel." for b in output["beats"])
@@ -635,3 +635,37 @@ def test_video_frame_cache_invalidates_on_source_change(tmp_path, monkeypatch):
     storyboard.build_storyboard([], 0, 12, "casual", "en", checkpoint,
                                 source=source, basis="video")
     assert sampled == pytest.approx([3.0, 9.0, 3.0, 9.0])
+
+
+def test_context_scripts_keep_individual_lines_and_flag_obvious_draft_problems(
+        tmp_path, monkeypatch):
+    def respond(payload, **_kwargs):
+        windows = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        labels = {
+            0: "The camera shows a red door",
+            1: "The camera shows a red door",
+            2: "A person stands in front of",
+        }
+        return json.dumps({"beats": [
+            {"id": w["id"], "text": labels[w["id"]]} for w in windows
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", respond)
+    speech = [
+        {"start": 0, "end": 5, "text": "The camera shows a red door"},
+        {"start": 5, "end": 10, "text": "The camera shows a red door"},
+        {"start": 10, "end": 15, "text": "A person stands next to a window"},
+    ]
+    output = storyboard.build_storyboard(
+        speech, 0, 15, "casual", "en", tmp_path / "context.json",
+        basis="transcript", purpose="overlay",
+    )
+    assert output["script"].count("\n") == 2
+    assert output["script_review_flags"] == [
+        "context_repeats_spoken_dialogue",
+        "incomplete_ai_script_phrase",
+        "repeated_ai_script_phrases",
+    ]
+    assert output["script"].splitlines() == [
+        beat["text"] for beat in output["beats"]
+    ]

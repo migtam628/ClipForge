@@ -114,11 +114,13 @@ def test_partial_video_analysis_is_flagged_for_review(monkeypatch, tmp_path):
         tmp_path / "sample.mp4", expected_duration=10, aspect_ratio="4:3",
         source_has_audio=False, narration="none", script=None, beats=[],
         captions_requested=False, captions_added=False,
-        candidate={"frame_sample_failures": 1, "script_fallbacks": 2},
+        candidate={"frame_sample_failures": 1, "script_fallbacks": 2,
+                   "script_review_flags": ["incomplete_ai_script_phrase"]},
     )
     assert report["technical_pass"]
     assert "video_frame_sampling_incomplete" in report["review_flags"]
     assert "script_contains_source_excerpts_after_ai_timeout" in report["review_flags"]
+    assert "incomplete_ai_script_phrase" in report["review_flags"]
 
 
 def test_genuine_export_with_ffmpeg_is_technically_checked(tmp_path):

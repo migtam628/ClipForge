@@ -668,6 +668,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     if storyboard else 0,
                     "script_fallbacks": storyboard.get("script_fallbacks", 0)
                     if storyboard else 0,
+                    "script_review_flags": storyboard.get("script_review_flags", [])
+                    if storyboard else [],
                     "creator_focus": opts.clip_focus,
                     "creator_niche": opts.content_niche,
                     "brand_text": opts.brand_text.strip(),
@@ -1508,6 +1510,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 if storyboard else 0,
                 "script_fallbacks": storyboard.get("script_fallbacks", 0)
                 if storyboard else 0,
+                "script_review_flags": storyboard.get("script_review_flags", [])
+                if storyboard else [],
             },
         )
         # Commit metadata only after a playable final MP4 exists.
@@ -1525,7 +1529,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "frame_sample_failures", "script_fallbacks",
-                    "brand_text",
+                    "script_review_flags", "brand_text",
                     "segments", "music_enabled", "music_volume",
                 )
             })
@@ -1558,6 +1562,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                                        if storyboard else 0),
                 script_fallbacks=(storyboard.get("script_fallbacks", 0)
                                   if storyboard else 0),
+                script_review_flags=(storyboard.get("script_review_flags", [])
+                                     if storyboard else []),
                 brand_text=edit.brand_text.strip(),
                 source_volume=(edit.source_volume if edit.source_volume is not None
                                else (0.18 if voiceover else 1.0)),
