@@ -85,6 +85,12 @@ def test_local_post_copy_is_truthful_editable_and_cached(monkeypatch, tmp_path):
         clip, transcript(), "gaming", "en", path,
     ) == first
     assert len(prompts) == 1
+    regenerated = module_tools.suggest_post_copy(
+        clip, transcript(), "gaming", "en", path, regenerate=True,
+    )
+    assert regenerated == first
+    assert len(prompts) == 2
+    assert "NOT a voiceover" in prompts[1]
 
 
 def test_creator_profiles_and_post_copy_endpoint(tmp_path, monkeypatch):
@@ -126,6 +132,9 @@ def test_creator_profiles_and_post_copy_endpoint(tmp_path, monkeypatch):
     clip = module._read(folder)["clips"][0]
     assert clip["post_copy_state"] == "completed"
     assert clip["post_copy"]["title"] == "A gaming highlight"
+    regenerate = client.post(f"/api/jobs/{jobid}/clips/1/post-copy?regenerate=true")
+    assert regenerate.status_code == 202
+    assert submitted[-1][3] is True
 
 
 def test_brand_overlay_is_sanitized_and_renders(tmp_path):

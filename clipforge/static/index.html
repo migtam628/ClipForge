@@ -178,25 +178,31 @@
       </section>
 
       <section id="view-library" class="page-view" hidden>
-        <div class="page-heading library-heading">
-          <div><div class="eyebrow">YOUR CREATIVE ARCHIVE</div><h1>Clip <span>Library.</span></h1><p class="lede">Everything you've created, organized by source. Preview, refine, and download your best moments.</p></div>
-          <a class="small-action primary-action" href="/studio">✦ Create clips</a>
-        </div>
-        <div class="library-overview" id="library-metrics" aria-label="Library overview">
-          <div class="library-metric"><span class="library-metric-label">Total clips</span><strong id="library-total-clips">—</strong><span class="library-metric-foot">Ready to preview</span></div>
-          <div class="library-metric"><span class="library-metric-label">Projects</span><strong id="library-total-sources">—</strong><span class="library-metric-foot">Video processing jobs</span></div>
-          <div class="library-metric"><span class="library-metric-label">With commentary</span><strong id="library-total-narrated">—</strong><span class="library-metric-foot">Voice or written script</span></div>
-        </div>
-        <div class="library-toolbar">
-          <div class="library-toolbar-title"><strong>Your projects</strong><span id="library-summary" role="status">Loading clips…</span></div>
-          <div class="library-toolbar-controls">
-            <label class="library-search-field"><span class="sr-only">Search clips and source videos</span><span aria-hidden="true">⌕</span><input id="library-search" type="search" placeholder="Search clips, titles, or sources…" autocomplete="off"></label>
-            <label class="library-select-field"><span class="sr-only">Filter library by status</span><select id="library-filter"><option value="all">All projects</option><option value="ready">Ready</option><option value="processing">Processing</option></select></label>
-            <label class="library-select-field"><span class="sr-only">Sort library projects</span><select id="library-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="clips">Most clips</option></select></label>
-            <button type="button" class="refresh library-refresh" data-refresh aria-label="Refresh library" title="Refresh library">↻ <span>Refresh</span></button>
+        <header class="media-library-heading">
+          <div><h1>Library</h1><p><span id="library-total-clips">0</span> clips <span class="library-heading-separator">·</span> <span id="library-total-sources">0</span> sources</p></div>
+          <a class="library-create" href="/studio">+ Create clips</a>
+        </header>
+        <div class="media-library-workspace">
+          <div class="media-library-tools">
+            <div id="library-status-tabs" class="library-status-tabs" role="group" aria-label="Filter clips by status">
+              <button class="library-status-tab is-active" type="button" data-library-status="all" aria-pressed="true">All <span data-library-count="all">0</span></button>
+              <button class="library-status-tab" type="button" data-library-status="ready" aria-pressed="false">Ready <span data-library-count="ready">0</span></button>
+              <button class="library-status-tab" type="button" data-library-status="processing" aria-pressed="false">Processing <span data-library-count="processing">0</span></button>
+              <button class="library-status-tab" type="button" data-library-status="failed" aria-pressed="false">Failed <span data-library-count="failed">0</span></button>
+            </div>
+            <div class="media-library-controls">
+              <label class="media-library-search"><span class="sr-only">Search clips and source videos</span><input id="library-search" type="search" placeholder="Search clips or sources…" autocomplete="off"></label>
+              <label class="media-library-sort"><span class="sr-only">Sort clips</span><select id="library-sort"><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="duration">Longest</option></select></label>
+              <div class="library-view-switch" role="group" aria-label="Library viewing mode">
+                <button type="button" data-library-view="grid" aria-pressed="true">Grid</button>
+                <button type="button" data-library-view="list" aria-pressed="false">List</button>
+                <button type="button" data-library-view="review" aria-pressed="false">Review</button>
+              </div>
+            </div>
           </div>
+          <div class="media-library-summary"><span id="library-summary" role="status">Loading clips…</span><button type="button" class="library-update" data-refresh>Refresh</button></div>
+          <div id="jobs-library" class="media-library-results" aria-live="polite"></div>
         </div>
-        <div id="jobs-library" class="jobs" aria-live="polite"></div>
       </section>
 
       <section id="view-publishing" class="page-view" hidden>

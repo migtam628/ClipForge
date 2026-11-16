@@ -7,9 +7,16 @@ let creatorProfiles = [];
 let libraryJobs = [];
 const libraryExpanded = new Set();
 let libraryInitialized = false;
+const libraryViews = ['grid', 'list', 'review'];
+let libraryView = libraryViews.includes(localStorage.getItem('clipforge.library.view'))
+  ? localStorage.getItem('clipforge.library.view') : 'grid';
+let libraryStatus = 'all';
+let selectedLibraryClip = null;
+let expandedLibraryRow = null;
 const validPages = ['studio', 'library', 'publishing', 'posting-settings', 'analytics', 'activity', 'settings'];
 const currentPage = validPages.includes(location.pathname.slice(1))
   ? location.pathname.slice(1) : 'studio';
+document.body.dataset.page = currentPage;
 const labels = {studio: 'Studio', library: 'Clip Library',
   publishing: 'Publishing', 'posting-settings': 'Posting settings',
   analytics: 'Analytics', activity: 'Activity', settings: 'Settings'};
@@ -485,9 +492,22 @@ $('creator-profile-select').addEventListener('change', applyCreatorProfile);
 for (const button of document.querySelectorAll('[data-refresh]')) {
   button.addEventListener('click', refresh);
 }
-// Library search and filters are local: no new server requests for each keystroke.
-for (const id of ['library-search', 'library-filter', 'library-sort']) {
+// Library controls operate on the already-fetched jobs; switching views never starts a new job.
+for (const id of ['library-search', 'library-sort']) {
   $(id).addEventListener(id === 'library-search' ? 'input' : 'change', renderLibrary);
+}
+for (const button of document.querySelectorAll('[data-library-view]')) {
+  button.addEventListener('click', () => {
+    libraryView = button.dataset.libraryView;
+    localStorage.setItem('clipforge.library.view', libraryView);
+    renderLibrary();
+  });
+}
+for (const button of document.querySelectorAll('[data-library-status]')) {
+  button.addEventListener('click', () => {
+    libraryStatus = button.dataset.libraryStatus;
+    renderLibrary();
+  });
 }
 function chosenVideoFiles() {
   const folderFiles = $('folder').files.length ? [...$('folder').files] : [...$('file').files];
@@ -1781,65 +1801,485 @@ function card(job, mode = currentPage) {
   return wrapper;
 }
 
+function libraryProgress(job) {
+  const value = Number(job.progress);
+  return Number.isFinite(value) ? clamp(Math.round(value), 0, 100) : 0;
+}
+
+function librarySource(job) {
+  const label = String(job.label || 'Untitled source');
+  try {
+    const url = new URL(label);
+    const host = url.hostname.replace(/^www\./, '');
+    return host + (url.searchParams.get('v') ? ' · ' + url.searchParams.get('v') : '');
+  } catch { return label; }
+}
+
+function libraryTimestamp(seconds) {
+  const n = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+}
+
+function libraryEntries() {
+  return libraryJobs.flatMap((job) => {
+    const clips = (job.clips || []).map((clip) => ({
+      key: job.id + ':' + clip.number, job, clip, status: 'ready'
+    }));
+    if (!clips.length || job.status !== 'completed') clips.push({
+      key: job.id + ':job', job, clip: null,
+      status: job.status === 'failed' ? 'failed' :
+        job.status === 'completed' ? 'ready' : 'processing'
+    });
+    return clips;
+  });
+}
+
+function libraryName(entry) {
+  return entry.clip?.title || (entry.clip
+    ? `Clip ${String(entry.clip.number).padStart(2, '0')}`
+    : librarySource(entry.job));
+}
+
+function libraryImage(entry, className = '') {
+  const media = el('div', 'media-library-thumb ' + className);
+  if (entry.clip?.thumbnail) {
+    const img = el('img');
+    img.src = `/api/jobs/${entry.job.id}/clips/${entry.clip.thumbnail}`;
+    img.alt = '';
+    img.loading = 'lazy';
+    media.append(img);
+  } else media.append(el('span', 'media-library-no-thumb', entry.clip ? 'Video' :
+    entry.status === 'failed' ? 'No preview' : 'In progress'));
+  if (entry.clip) media.append(el('span', 'media-library-duration', libraryTimestamp(entry.clip.duration)));
+  return media;
+}
+
+function libraryStatusLabel(entry) {
+  const status = el('span', 'media-library-status status-' + entry.status);
+  if (entry.status === 'processing') {
+    const percent = libraryProgress(entry.job);
+    status.append(el('span', 'media-library-status-text', `${entry.job.status} ${percent}%`));
+    const bar = el('span', 'media-library-progress');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', `${entry.job.status} progress`);
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.setAttribute('aria-valuenow', String(percent));
+    const fill = el('span');
+    fill.style.width = `${percent}%`;
+    bar.append(fill);
+    status.append(bar);
+  } else status.append(el('span', '', entry.status === 'ready' ? 'Ready' : 'Failed'));
+  return status;
+}
+
+function libraryDownload(entry, label = 'Download MP4') {
+  const link = el('a', 'media-library-download', label);
+  link.href = `/api/jobs/${entry.job.id}/clips/${entry.clip.filename}`;
+  link.download = entry.clip.filename;
+  link.setAttribute('aria-label', `Download ${libraryName(entry)} as MP4`);
+  return link;
+}
+
+function librarySelectClip(entry) {
+  selectedLibraryClip = entry.key;
+  libraryView = 'review';
+  localStorage.setItem('clipforge.library.view', libraryView);
+  renderLibrary();
+}
+
+function buildLibraryAiAssistant(job, clip) {
+  const panel = el('section', 'media-library-ai');
+  panel.setAttribute('aria-label', 'AI content assistant');
+  const heading = el('div', 'media-library-ai-heading');
+  const title = el('div');
+  title.append(el('span', 'media-library-ai-eyebrow', '✦ LOCAL AI · OLLAMA'),
+    el('h3', '', 'Content assistant'));
+  const generate = el('button', 'media-library-ai-generate',
+    clip.post_copy ? 'Regenerate ideas' : 'Generate post ideas');
+  generate.type = 'button';
+  heading.append(title, generate);
+  panel.append(heading, el('p', 'media-library-ai-intro',
+    'Suggest a title, short caption and hashtags related to this actual clip. No voiceover. Nothing publishes automatically.'));
+  const feedback = el('p', 'media-library-ai-feedback');
+  feedback.setAttribute('role', 'status');
+  const content = el('div', 'media-library-ai-content');
+  panel.append(feedback, content);
+
+  const fill = (current) => {
+    const state = current.post_copy_state || '';
+    generate.disabled = ['queued', 'generating'].includes(state);
+    feedback.textContent = state === 'queued' || state === 'generating'
+      ? 'Analyzing saved clip evidence and preparing ideas…'
+      : state === 'failed' ? (current.post_copy_error || 'AI could not generate suggestions.')
+      : current.post_copy ? 'Suggestions are ready. Review and edit before sharing.'
+      : 'Uses saved transcript and scene context. A clip without either cannot be analyzed yet.';
+    feedback.classList.toggle('is-error', state === 'failed');
+    content.replaceChildren();
+    if (!current.post_copy) return;
+    const draft = current.post_copy;
+    const form = el('div', 'media-library-ai-fields');
+    const titleLabel = el('label', '', 'Post title');
+    const titleInput = el('input');
+    titleInput.type = 'text';
+    titleInput.maxLength = 85;
+    titleInput.value = draft.title || '';
+    titleLabel.append(titleInput);
+    const descriptionLabel = el('label', '', 'Caption');
+    const caption = el('textarea');
+    caption.rows = 3;
+    caption.maxLength = 450;
+    caption.value = draft.description || '';
+    descriptionLabel.append(caption);
+    const tagsLabel = el('label', '', 'Hashtags');
+    const tags = el('input');
+    tags.type = 'text';
+    tags.value = (draft.hashtags || []).join(' ');
+    tagsLabel.append(tags);
+    form.append(titleLabel, descriptionLabel, tagsLabel);
+    const actions = el('div', 'media-library-ai-actions');
+    const copy = el('button', 'media-library-ai-copy', 'Copy edited ideas');
+    copy.type = 'button';
+    copy.addEventListener('click', async () => {
+      const copyText = [titleInput.value.trim(), caption.value.trim(), tags.value.trim()]
+        .filter(Boolean).join('\n\n');
+      try {
+        await navigator.clipboard.writeText(copyText);
+        notify('AI draft copied. Review it before publishing.');
+      } catch { notify('Copy is unavailable in this browser.'); }
+    });
+    const publish = el('a', 'media-library-secondary', 'Open Publishing');
+    publish.href = '/publishing';
+    actions.append(copy, publish);
+    content.append(form, actions);
+  };
+
+  // Refresh this panel in place so a playing video is never recreated by polling.
+  const poll = async (attempt = 0) => {
+    if (!panel.isConnected || attempt > 60) return;
+    try {
+      const response = await fetch(`/api/jobs/${job.id}`, {cache: 'no-store'});
+      if (!response.ok) throw new Error('Could not check AI progress');
+      const latest = await response.json();
+      const updated = (latest.clips || []).find((item) => item.number === clip.number);
+      if (!updated) throw new Error('Clip no longer exists');
+      Object.assign(clip, updated);
+      fill(clip);
+      if (!['queued', 'generating'].includes(clip.post_copy_state)) return;
+    } catch (error) {
+      feedback.textContent = error.message + ' · Retrying…';
+    }
+    setTimeout(() => poll(attempt + 1), 2500);
+  };
+
+  generate.addEventListener('click', async () => {
+    generate.disabled = true;
+    feedback.textContent = 'Starting local AI analysis…';
+    try {
+      const url = `/api/jobs/${job.id}/clips/${clip.number}/post-copy` +
+        (clip.post_copy ? '?regenerate=true' : '');
+      const response = await fetch(url,
+        {method: 'POST'});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Could not start AI generation');
+      clip.post_copy_state = 'queued';
+      fill(clip);
+      setTimeout(() => poll(), 1200);
+    } catch (error) {
+      feedback.textContent = error.message;
+      feedback.classList.add('is-error');
+      generate.disabled = false;
+    }
+  });
+  fill(clip);
+  if (['queued', 'generating'].includes(clip.post_copy_state)) setTimeout(() => poll(), 1200);
+  return panel;
+}
+
+function libraryJobActions(job) {
+  const actions = el('div', 'media-library-source-actions');
+  if (job.status === 'failed') {
+    const retry = el('button', 'media-library-secondary', 'Resume job');
+    retry.addEventListener('click', async () => {
+      retry.disabled = true;
+      try {
+        const response = await fetch(`/api/jobs/${job.id}/resume`, {method: 'POST'});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.detail || 'Could not resume job');
+        notify('Job queued for recovery.');
+        await refresh();
+      } catch (error) { notify(error.message); retry.disabled = false; }
+    });
+    actions.append(retry);
+  }
+  if (job.status === 'completed' || job.status === 'failed') {
+    const remove = el('button', 'media-library-danger', 'Delete source');
+    remove.addEventListener('click', async () => {
+      if (!confirm('Delete this source and every generated clip?')) return;
+      const response = await fetch(`/api/jobs/${job.id}`, {method: 'DELETE'});
+      if (!response.ok) return notify('Could not delete this source.');
+      selectedLibraryClip = null;
+      await refresh();
+    });
+    actions.append(remove);
+  }
+  return actions;
+}
+
+function renderLibraryGrid(entries, target) {
+  const grid = el('div', 'media-library-grid');
+  for (const entry of entries) {
+    const tile = el('article', 'media-library-tile');
+    const preview = el('button', 'media-library-poster');
+    preview.type = 'button';
+    preview.append(libraryImage(entry));
+    preview.setAttribute('aria-label', 'Review ' + libraryName(entry));
+    preview.addEventListener('click', () => librarySelectClip(entry));
+    const details = el('div', 'media-library-tile-info');
+    const title = el('button', 'media-library-tile-title', libraryName(entry));
+    title.type = 'button';
+    title.addEventListener('click', () => librarySelectClip(entry));
+    details.append(title, el('span', 'media-library-source-name', librarySource(entry.job)));
+    if (entry.clip) {
+      details.append(el('span', 'media-library-fine-print',
+        `${entry.clip.aspect_ratio || entry.job.options?.aspect_ratio || '9:16'} · ${libraryTimestamp(entry.clip.duration)} · ${new Date(entry.job.created_at).toLocaleDateString()}`));
+      const actions = el('div', 'media-library-tile-actions');
+      actions.append(libraryStatusLabel(entry), libraryDownload(entry, 'Download'));
+      details.append(actions);
+      if (entry.job.status === 'completed') {
+        const ai = el('button', 'media-library-ai-link', '✦ AI ideas');
+        ai.type = 'button';
+        ai.addEventListener('click', () => librarySelectClip(entry));
+        details.append(ai);
+      }
+    } else details.append(libraryStatusLabel(entry));
+    tile.append(preview, details);
+    grid.append(tile);
+  }
+  target.append(grid);
+}
+
+function renderLibraryList(entries, target) {
+  const table = el('div', 'media-library-table');
+  const headings = el('div', 'media-library-table-head');
+  for (const text of ['Clip', 'Source', 'Status', 'Aspect', 'Duration', 'Created', ''])
+    headings.append(el('span', '', text));
+  table.append(headings);
+  for (const entry of entries) {
+    const group = el('div', 'media-library-table-group');
+    const row = el('div', 'media-library-table-row');
+    const titleCell = el('div', 'media-library-table-title-cell');
+    const preview = el('button', 'media-library-row-poster');
+    preview.type = 'button';
+    preview.append(libraryImage(entry));
+    preview.setAttribute('aria-label', 'Show details for ' + libraryName(entry));
+    preview.addEventListener('click', () => {
+      expandedLibraryRow = expandedLibraryRow === entry.key ? null : entry.key;
+      renderLibrary();
+    });
+    const titleText = el('div');
+    titleText.append(el('strong', '', libraryName(entry)),
+      el('span', '', entry.clip?.reason || entry.job.options?.content_niche || 'Source video'));
+    titleCell.append(preview, titleText);
+    const source = el('span', 'media-library-truncate', librarySource(entry.job));
+    source.title = entry.job.label || '';
+    const aspect = el('span', '', entry.clip?.aspect_ratio || entry.job.options?.aspect_ratio || '—');
+    const duration = el('span', '', entry.clip ? libraryTimestamp(entry.clip.duration) : '—');
+    const date = el('span', '', new Date(entry.job.created_at).toLocaleDateString());
+    const actions = el('div', 'media-library-row-actions');
+    const review = el('button', 'media-library-secondary', entry.clip ? 'Preview' : 'Details');
+    review.type = 'button';
+    review.addEventListener('click', () => librarySelectClip(entry));
+    actions.append(review);
+    if (entry.clip) actions.append(libraryDownload(entry, '↓'));
+    row.append(titleCell, source, libraryStatusLabel(entry), aspect, duration, date, actions);
+    group.append(row);
+    if (expandedLibraryRow === entry.key) {
+      const details = el('div', 'media-library-list-details');
+      if (entry.clip) {
+        const video = el('video');
+        video.controls = true;
+        video.preload = 'metadata';
+        video.src = `/api/jobs/${entry.job.id}/clips/${entry.clip.filename}`;
+        if (entry.clip.thumbnail) video.poster = `/api/jobs/${entry.job.id}/clips/${entry.clip.thumbnail}`;
+        details.append(video);
+        const info = el('div');
+        info.append(el('h3', '', libraryName(entry)),
+          el('p', '', `Start ${libraryTimestamp(entry.clip.start)} · ${entry.clip.aspect_ratio || entry.job.options?.aspect_ratio || '9:16'} · ${libraryTimestamp(entry.clip.duration)}`));
+        if (entry.clip.reason) info.append(el('p', '', entry.clip.reason));
+        if (entry.job.status === 'completed') info.append(
+          buildLibraryAiAssistant(entry.job, entry.clip),
+          buildClipEditor(entry.job, entry.clip));
+        details.append(info);
+      } else {
+        details.append(el('p', '', entry.job.error || 'This source has not produced a clip yet.'),
+          libraryJobActions(entry.job));
+      }
+      group.append(details);
+    }
+    table.append(group);
+  }
+  target.append(table);
+}
+
+function renderLibraryReview(entries, target) {
+  const selected = entries.find((entry) => entry.key === selectedLibraryClip) || entries[0];
+  if (!selected) return;
+  selectedLibraryClip = selected.key;
+  const layout = el('div', 'media-library-review');
+  const rail = el('nav', 'media-library-review-rail');
+  rail.setAttribute('aria-label', 'Choose a clip to review');
+  rail.append(el('p', 'media-library-review-count', `${entries.length} items`));
+  for (const entry of entries) {
+    const item = el('button', 'media-library-rail-item' +
+      (entry.key === selected.key ? ' is-selected' : ''));
+    item.type = 'button';
+    item.setAttribute('aria-current', entry.key === selected.key ? 'true' : 'false');
+    item.append(libraryImage(entry));
+    const text = el('span', 'media-library-rail-label');
+    text.append(el('strong', '', libraryName(entry)), libraryStatusLabel(entry));
+    item.append(text);
+    item.addEventListener('click', () => {
+      selectedLibraryClip = entry.key;
+      renderLibrary();
+    });
+    rail.append(item);
+  }
+  const detail = el('div', 'media-library-review-main');
+  if (selected.clip) {
+    const stage = el('div', 'media-library-player');
+    const video = el('video');
+    video.controls = true;
+    video.preload = 'metadata';
+    video.src = `/api/jobs/${selected.job.id}/clips/${selected.clip.filename}`;
+    if (selected.clip.thumbnail) video.poster = `/api/jobs/${selected.job.id}/clips/${selected.clip.thumbnail}`;
+    stage.append(video);
+    detail.append(stage);
+    const intro = el('div', 'media-library-review-intro');
+    const title = el('div');
+    title.append(el('h2', '', libraryName(selected)), libraryStatusLabel(selected));
+    const actions = el('div', 'media-library-review-actions');
+    actions.append(libraryDownload(selected));
+    const publishing = el('a', 'media-library-secondary', 'Review in Publishing');
+    publishing.href = '/publishing';
+    actions.append(publishing);
+    intro.append(title, actions);
+    detail.append(intro);
+    const metadata = el('dl', 'media-library-inspector');
+    for (const [key, value] of [
+      ['Source', librarySource(selected.job)],
+      ['Start point', libraryTimestamp(selected.clip.start)],
+      ['Duration', libraryTimestamp(selected.clip.duration)],
+      ['Aspect ratio', selected.clip.aspect_ratio || selected.job.options?.aspect_ratio || '—'],
+      ['Selection', selected.clip.reason || 'Highlight selected from the source video']
+    ]) metadata.append(el('dt', '', key), el('dd', '', value));
+    detail.append(metadata);
+    const attributes = [
+      selected.clip.captions_added && 'Captions',
+      selected.clip.context_added && 'Scene-aware text',
+      selected.clip.voiceover_added && 'Story voiceover',
+      selected.clip.framing === 'split' && 'Split layout',
+      selected.clip.face_tracking && 'Face-aware crop',
+      selected.clip.revision_count && `Revision ${selected.clip.revision_count}`
+    ].filter(Boolean);
+    if (attributes.length) {
+      const tags = el('div', 'media-library-attributes');
+      for (const label of attributes) tags.append(el('span', '', label));
+      detail.append(tags);
+    }
+    if (selected.clip.script) {
+      const script = el('details', 'media-library-script');
+      script.append(el('summary', '', 'View video-related script'),
+        el('p', '', selected.clip.script));
+      detail.append(script);
+    }
+    if (selected.clip.quality_report) {
+      const report = selected.clip.quality_report;
+      const checks = el('details', 'media-library-script');
+      checks.append(el('summary', '', 'Export quality checks'));
+      checks.append(el('p', '', report.technical_pass ?
+        'Technical checks passed. Review creative quality before publishing.' :
+        'Technical checks need attention before publishing.'));
+      const flags = [...(report.technical_issues || []), ...(report.review_flags || [])];
+      for (const flag of flags) checks.append(el('p', '', String(flag).replaceAll('_', ' ')));
+      detail.append(checks);
+    }
+    if (selected.job.status === 'completed') detail.append(
+      buildLibraryAiAssistant(selected.job, selected.clip),
+      buildClipEditor(selected.job, selected.clip));
+  } else {
+    const pending = el('div', 'media-library-awaiting');
+    pending.append(el('h2', '', libraryName(selected)), libraryStatusLabel(selected),
+      el('p', '', selected.job.error || 'Your clip will appear here as soon as it is ready.'));
+    detail.append(pending);
+  }
+  detail.append(libraryJobActions(selected.job));
+  layout.append(rail, detail);
+  target.append(layout);
+}
+
 function renderLibrary() {
   if (currentPage !== 'library') return;
   const query = $('library-search').value.trim().toLocaleLowerCase();
-  const filter = $('library-filter').value;
   const sort = $('library-sort').value;
-  const allClips = libraryJobs.flatMap((job) => job.clips || []);
-  $('library-total-clips').textContent = String(allClips.length);
+  const all = libraryEntries();
+  $('library-total-clips').textContent = String(all.filter((entry) => entry.clip).length);
   $('library-total-sources').textContent = String(libraryJobs.length);
-  $('library-total-narrated').textContent = String(
-    allClips.filter((clip) => clip.script || clip.voiceover_added).length);
-  const visible = libraryJobs.filter((job) => {
-    if (filter === 'ready' && (job.status !== 'completed' || !job.clips.length)) return false;
-    if (filter === 'processing' && !['queued', 'downloading', 'analyzing',
-      'transcribing', 'selecting', 'rendering'].includes(job.status)) return false;
-    if (!query) return true;
-    const searchable = [job.label, job.options?.content_niche,
-      ...(job.clips || []).flatMap((clip) =>
-        [clip.title, clip.reason, clip.script, clip.brand_text])].join(' ').toLocaleLowerCase();
-    return searchable.includes(query);
-  });
-  visible.sort((a, b) => {
-    if (sort === 'clips') return b.clips.length - a.clips.length ||
-      new Date(b.created_at) - new Date(a.created_at);
-    return sort === 'oldest'
-      ? new Date(a.created_at) - new Date(b.created_at)
-      : new Date(b.created_at) - new Date(a.created_at);
-  });
-  if (!libraryInitialized && visible.length) {
-    libraryExpanded.add(visible[0].id);
-    libraryInitialized = true;
+  for (const status of ['all', 'ready', 'processing', 'failed']) {
+    const count = status === 'all' ? all.length :
+      all.filter((entry) => entry.status === status).length;
+    document.querySelector(`[data-library-count="${status}"]`).textContent = String(count);
   }
-  const count = visible.reduce((sum, job) => sum + job.clips.length, 0);
-  $('library-summary').textContent =
-    `${visible.length} project${visible.length === 1 ? '' : 's'} · ${count} clip${count === 1 ? '' : 's'}`;
+  for (const button of document.querySelectorAll('[data-library-status]')) {
+    const active = button.dataset.libraryStatus === libraryStatus;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  for (const button of document.querySelectorAll('[data-library-view]')) {
+    const active = button.dataset.libraryView === libraryView;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  const entries = all.filter((entry) => {
+    if (libraryStatus !== 'all' && entry.status !== libraryStatus) return false;
+    if (!query) return true;
+    return [entry.job.label, entry.job.options?.content_niche, entry.clip?.title,
+      entry.clip?.reason, entry.clip?.script, entry.clip?.brand_text]
+      .filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
+  });
+  entries.sort((a, b) => {
+    if (sort === 'duration') return Number(b.clip?.duration || 0) -
+      Number(a.clip?.duration || 0) || new Date(b.job.created_at) - new Date(a.job.created_at);
+    const date = new Date(b.job.created_at) - new Date(a.job.created_at);
+    return (sort === 'oldest' ? -date : date) ||
+      (Number(a.clip?.number || 0) - Number(b.clip?.number || 0));
+  });
+  $('library-summary').textContent = `${entries.length} item${entries.length === 1 ? '' : 's'} · ${libraryView} view`;
   const target = $('jobs-library');
   target.replaceChildren();
-  if (!visible.length) {
-    const empty = el('div', 'empty library-empty');
-    empty.append(el('div', 'empty-graphic', query || filter !== 'all' ? '⌕' : '▤'),
-      el('strong', '', query || filter !== 'all' ? 'No projects match your filters' :
-        'Your clip library is ready for its first project'),
-      el('span', '', query || filter !== 'all' ? 'Try a different search or project status.' :
-        'Create a video in Studio to see your clips here.'));
-    if (query || filter !== 'all') {
-      const clear = el('button', 'small-action', 'Clear filters');
-      clear.type = 'button';
+  if (!entries.length) {
+    const empty = el('div', 'media-library-empty');
+    empty.append(el('h2', '', query || libraryStatus !== 'all' ?
+      'No clips match this view' : 'Your library is ready'),
+    el('p', '', query || libraryStatus !== 'all' ?
+      'Try another search or status.' : 'Create your first clips to see them here.'));
+    if (query || libraryStatus !== 'all') {
+      const clear = el('button', 'media-library-secondary', 'Clear filters');
       clear.addEventListener('click', () => {
         $('library-search').value = '';
-        $('library-filter').value = 'all';
+        libraryStatus = 'all';
         renderLibrary();
       });
       empty.append(clear);
     } else {
-      const create = el('a', 'small-action primary-action', '✦ Create clips');
+      const create = el('a', 'library-create', 'Create clips');
       create.href = '/studio';
       empty.append(create);
     }
     target.append(empty);
-  } else target.append(...visible.map((job) => card(job, 'library')));
+  } else if (libraryView === 'list') renderLibraryList(entries, target);
+  else if (libraryView === 'review') renderLibraryReview(entries, target);
+  else renderLibraryGrid(entries, target);
 }
 
 async function refresh() {
@@ -2218,9 +2658,11 @@ loadCreatorProfiles();
 loadPostingSettings();
 refresh();
 setInterval(() => {
-  // Library is refreshed explicitly: don't interrupt paused previews, filters, or expanded folders.
-  if (!['publishing', 'activity'].includes(currentPage)) return;
-  // Do not recreate a video player while someone is watching it or editing a post.
+  if (!['publishing', 'activity', 'library'].includes(currentPage)) return;
+  // Keep percentages up to date without interrupting viewing, editing or typing a search.
+  if (currentPage === 'library' &&
+      (['library-search', 'library-sort'].includes(document.activeElement?.id) ||
+       document.querySelector('#jobs-library video'))) return;
   if (![...document.querySelectorAll('video')].some((v) => !v.paused) &&
       ![...document.querySelectorAll('.publish-panel')].some((p) => !p.hidden) &&
       ![...document.querySelectorAll('.clip-editor')].some((p) => p.open)) {

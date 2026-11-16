@@ -1057,7 +1057,7 @@ def save_creator_profile(profile: CreatorProfile):
     return entry
 
 
-def _post_copy_worker(folder: Path, number: int) -> None:
+def _post_copy_worker(folder: Path, number: int, regenerate: bool = False) -> None:
     """Generate an optional reviewable publishing draft with local Ollama."""
     try:
         with LOCK:
@@ -1073,10 +1073,10 @@ def _post_copy_worker(folder: Path, number: int) -> None:
                 transcript = transcribe(source, DATA_DIR / "models")
                 save_json(folder / "transcript.json", transcript)
         opts = Options(**job["options"])
-        draft = suggest_post_copy(
-            clip, transcript, opts.content_niche, opts.narration_language,
-            folder / f"post-copy-{number:03d}.json",
-        )
+        args = (clip, transcript, opts.content_niche, opts.narration_language,
+                folder / f"post-copy-{number:03d}.json")
+        draft = (suggest_post_copy(*args, regenerate=True) if regenerate
+                 else suggest_post_copy(*args))
         with LOCK:
             latest = _read(folder)
             target = next(c for c in latest["clips"] if c["number"] == number)
@@ -1098,7 +1098,7 @@ def _post_copy_worker(folder: Path, number: int) -> None:
 
 
 @app.post("/api/jobs/{job_id}/clips/{number}/post-copy", status_code=202)
-def request_post_copy(job_id: str, number: int):
+def request_post_copy(job_id: str, number: int, regenerate: bool = False):
     """Never publish; only prepare a human-reviewable suggested caption."""
     folder = job_folder(job_id)
     with LOCK:
@@ -1114,7 +1114,7 @@ def request_post_copy(job_id: str, number: int):
             raise HTTPException(409, "Finish the clip revision before writing post copy")
         clip.update(post_copy_state="queued", post_copy_error=None)
         _write(folder, job)
-    POOL.submit(_post_copy_worker, folder, number)
+    POOL.submit(_post_copy_worker, folder, number, regenerate)
     return {"job_id": job_id, "clip": number, "status": "queued"}
 
 
