@@ -65,13 +65,18 @@ it is not required for the Docker production deployment.
 
 ## Professional social-video reframing and word-aligned captions (v0.5)
 
-**Studio → Vertical framing** now supports smart face-aware crop and blurred
+**Studio → Framing → Auto focus** supports smart face-aware crop and blurred
 background in addition to centered crop and padding. Smart tracking samples at
-most 32 frames per clip with OpenCV's CPU Haar face detector, smooths the target
-across samples and instructs FFmpeg to move the crop. If no face is detected,
-it safely falls back to centered framing. This is basic face-aware tracking,
-not identity recognition, lip-sync speaker attribution, or guaranteed tracking
-of multiple speakers. Raw face images/biometric templates are not retained.
+most 48 frames per clip with OpenCV's CPU Haar face detector, chooses a stable
+face where possible, and moves the FFmpeg crop horizontally **and vertically**
+according to the actual output dimensions. It interpolates the smoothed path at
+five updates per second, so playback pans smoothly rather than jumping between
+detections. Missing detections hold the last subject position; if a face cannot
+be confirmed in at least two sampled frames, the renderer safely falls back to
+centered framing.
+This remains basic face-aware tracking, **not general object or active-speaker
+tracking**, identity recognition, or guaranteed tracking of multiple people.
+Raw face images/biometric templates are not retained.
 
 **Automatic captions** now include two animated styles:
 

@@ -78,7 +78,7 @@
           <div class="journey-panel" data-journey-panel="1" hidden>
             <div class="panel-heading"><span class="step">02</span><div><h2>Frame the moment</h2><p>Local source players follow the original video dimensions; YouTube guides are approximate until import. Exports use your chosen ratio. Drag crop boxes to frame both people.</p></div></div>
             <div class="framing-layouts" role="group" aria-label="Framing layout">
-              <button type="button" class="framing-choice is-chosen" data-framing="smart"><strong>Auto focus</strong><small>Follow faces where detectable</small></button>
+              <button type="button" class="framing-choice is-chosen" data-framing="smart"><strong>Auto focus</strong><small>Smooth horizontal + vertical face follow</small></button>
               <button type="button" class="framing-choice" data-framing="split"><strong>Split in two</strong><small>Reaction / interview · stacked</small></button>
               <button type="button" class="framing-choice" data-framing="blur"><strong>Full scene</strong><small>Blurred background</small></button>
               <button type="button" class="framing-choice" data-framing="crop"><strong>Center</strong><small>Simple vertical crop</small></button>
@@ -128,7 +128,7 @@
                 <p class="helper-note" id="split-layout-status" role="status">Equal split · 50% / 50%</p>
               </div>
             </div>
-            <div class="framing-extra"><label for="framing">Render mode</label><select id="framing"><option value="smart" selected>Smart · follow faces</option><option value="split">Split in two · manual positions</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
+            <div class="framing-extra"><label for="framing">Render mode</label><select id="framing"><option value="smart" selected>Smart · smooth face follow</option><option value="split">Split in two · manual positions</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
           </div>
           <div class="journey-panel" data-journey-panel="2" hidden>
           <div class="settings-heading"><span class="step">02</span><div><h2>Clip settings</h2><p>Select the format, length and exact number of shorts</p></div></div>
@@ -348,7 +348,7 @@
               <label class="clip-marker-choice"><input type="checkbox" id="settings-use-voice-markers"><span>Use “clip this” spoken markers</span></label>
               <div class="field"><label for="settings-caption-style">Captions</label><select id="settings-caption-style"><option value="karaoke">Karaoke</option><option value="pop">Animated pop</option><option value="bold">Bold</option><option value="classic">Classic</option><option value="neon">Neon</option><option value="none">None</option></select></div>
               <div class="field"><label for="settings-effect">Effect</label><select id="settings-effect"><option value="pop">Pop</option><option value="cinema">Cinema</option><option value="noir">Noir</option><option value="none">Natural</option></select></div>
-              <div class="field"><label for="settings-framing">Framing</label><select id="settings-framing"><option value="smart">Smart face-aware crop</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
+              <div class="field"><label for="settings-framing">Framing</label><select id="settings-framing"><option value="smart">Smart · smooth face follow</option><option value="blur">Blurred background</option><option value="crop">Centered crop</option><option value="pad">Keep full frame</option></select></div>
               <div class="field"><label for="settings-hook-style">Opening headline</label><select id="settings-hook-style"><option value="headline">Show AI headline</option><option value="none">No headline</option></select></div>
               <div class="field"><label for="settings-narration">Text &amp; voice</label><select id="settings-narration"><option value="context">On-screen context (recommended)</option><option value="none">Original only</option><option value="script">Script saved only</option><option value="narrated">Story voiceover</option></select></div>
               <div class="field"><label for="settings-narration-style">Commentary style</label><select id="settings-narration-style"><option value="energetic">Energetic</option><option value="documentary">Documentary</option><option value="casual">Casual</option></select></div>

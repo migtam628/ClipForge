@@ -33,19 +33,109 @@ def crop_positions(centers: list[tuple[float, float]], frame_width: int, frame_h
     return result
 
 
-def write_tracking_commands(positions: list[tuple[float, int]], output: Path) -> bool:
-    """Use FFmpeg sendcmd to update crop@smart x at bounded timestamps."""
+def crop_follow_path(
+    centers: list[tuple[float, float, float]],
+    frame_width: int, frame_height: int,
+    out_width: int = 720, out_height: int = 1280,
+    step: float = 0.2,
+) -> list[tuple[float, int, int]]:
+    """Smooth two-axis subject centers into continuous crop movement.
+
+    The crop always fits the actual export aspect ratio. Sparse detections are
+    smoothed and interpolated at 5 Hz so playback does not jump per sample.
+    Clip lengths and the number of samples are already bounded by the caller.
+    """
+    if min(frame_width, frame_height, out_width, out_height) <= 0:
+        return []
+    if not math.isfinite(step) or not 0.1 <= step <= 1.0:
+        raise ValueError("Tracking step must be between 0.1 and 1 second")
+    scale = max(out_width / frame_width, out_height / frame_height)
+    scaled_width = math.ceil(frame_width * scale)
+    scaled_height = math.ceil(frame_height * scale)
+    max_x = max(0, scaled_width - out_width)
+    max_y = max(0, scaled_height - out_height)
+
+    def target(x: float, y: float) -> tuple[float, float]:
+        x = min(1.0, max(0.0, x))
+        y = min(1.0, max(0.0, y))
+        return (
+            min(max_x, max(0.0, scaled_width * x - out_width / 2)),
+            min(max_y, max(0.0, scaled_height * y - out_height / 2)),
+        )
+
+    points = sorted(
+        (float(t), float(x), float(y)) for t, x, y in centers[:64]
+        if all(math.isfinite(v) for v in (t, x, y)) and t >= 0
+    )
+    if not points:
+        return []
+    if points[-1][0] - points[0][0] > 120:
+        raise ValueError("Face tracking is limited to 120-second clips")
+    previous_t, first_x, first_y = points[0]
+    smooth_x, smooth_y = target(first_x, first_y)
+    anchors = [(previous_t, smooth_x, smooth_y)]
+    for timestamp, x, y in points[1:]:
+        dt = timestamp - previous_t
+        if dt <= 0:
+            continue
+        wanted_x, wanted_y = target(x, y)
+        # Fast enough to follow motion, slow enough to suppress noisy boxes.
+        alpha = 1 - math.exp(-dt / 0.55)
+        if max_x and abs(wanted_x - smooth_x) < out_width * 0.006:
+            wanted_x = smooth_x
+        if max_y and abs(wanted_y - smooth_y) < out_height * 0.006:
+            wanted_y = smooth_y
+        max_dx = out_width * 1.15 * dt
+        max_dy = out_height * 1.15 * dt
+        smooth_x += min(max_dx, max(-max_dx, (wanted_x - smooth_x) * alpha))
+        smooth_y += min(max_dy, max(-max_dy, (wanted_y - smooth_y) * alpha))
+        smooth_x = min(max_x, max(0.0, smooth_x))
+        smooth_y = min(max_y, max(0.0, smooth_y))
+        anchors.append((timestamp, smooth_x, smooth_y))
+        previous_t = timestamp
+
+    # FFmpeg sendcmd changes are instantaneous; interpolate between detection
+    # anchors so the apparent camera movement remains smooth when played.
+    result: list[tuple[float, int, int]] = []
+    for index, (timestamp, x, y) in enumerate(anchors):
+        if index:
+            prior_t, prior_x, prior_y = anchors[index - 1]
+            frames = math.ceil((timestamp - prior_t) / step)
+            for tick in range(1, frames):
+                phase = min(1.0, (tick * step) / (timestamp - prior_t))
+                result.append((
+                    round(prior_t + tick * step, 2),
+                    round(prior_x + (x - prior_x) * phase),
+                    round(prior_y + (y - prior_y) * phase),
+                ))
+        result.append((round(timestamp, 2), round(x), round(y)))
+    return result
+
+
+def write_tracking_commands(
+    positions: list[tuple[float, int] | tuple[float, int, int]], output: Path,
+) -> bool:
+    """Use FFmpeg sendcmd to update crop@smart x and optional y coordinates."""
     if not positions:
         return False
-    lines = [f"{timestamp:.2f} crop@smart x {max(0, x)};"
-             for timestamp, x in positions]
+    lines = []
+    for position in positions:
+        timestamp, x = position[:2]
+        if len(position) == 3:
+            y = position[2]
+            lines.append(
+                f"{timestamp:.2f} crop@smart x {max(0, x)}, "
+                f"crop@smart y {max(0, y)};"
+            )
+        else:
+            lines.append(f"{timestamp:.2f} crop@smart x {max(0, x)};")
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True
 
 
 def plan_face_tracking(source: Path, start: float, duration: float, output: Path,
                        out_width: int = 720, out_height: int = 1280) -> bool:
-    """Sample at most 32 frames, track the largest/nearest face and smooth crop.
+    """Sample at most 48 frames, track a consistent face and smooth XY crop.
 
     Falls back to the normal centered crop if the detector is unavailable or
     no reliable face is visible. Cost is bounded regardless of source length.
@@ -70,12 +160,12 @@ def plan_face_tracking(source: Path, start: float, duration: float, output: Path
         )
         if classifier.empty():
             return False
-        interval = max(1.0, duration / 32)
-        previous = 0.5
+        interval = max(0.5, duration / 48)
+        previous = (0.5, 0.5)
         samples = []
-        saw_face = False
+        face_hits = 0
         timestamp = 0.0
-        while timestamp < duration and len(samples) < 32:
+        while timestamp < duration and len(samples) < 48:
             capture.set(cv2.CAP_PROP_POS_MSEC, (start + timestamp) * 1000)
             ok, frame = capture.read()
             if not ok:
@@ -89,19 +179,24 @@ def plan_face_tracking(source: Path, start: float, duration: float, output: Path
                 minSize=(18, 18),
             )
             if len(faces):
-                ranked = sorted(
-                    faces,
-                    key=lambda face: -(face[2] * face[3]) +
-                    abs((face[0] + face[2] / 2) / gray.shape[1] - previous) * 600,
-                )
-                f = ranked[0]
-                previous = (f[0] + f[2] / 2) / gray.shape[1]
-                saw_face = True
-            samples.append((timestamp, previous))
+                def score(face):
+                    x, y, fw, fh = face
+                    center = ((x + fw / 2) / gray.shape[1],
+                              (y + fh / 2) / gray.shape[0])
+                    area = (fw * fh) / (gray.shape[1] * gray.shape[0])
+                    return area * 5 - math.dist(center, previous) * (0.65 if face_hits else 0)
+
+                f = max(faces, key=score)
+                previous = ((f[0] + f[2] / 2) / gray.shape[1],
+                            (f[1] + f[3] / 2) / gray.shape[0])
+                face_hits += 1
+            samples.append((timestamp, *previous))
             timestamp += interval
-        if not saw_face:
+        # An isolated detection can be a Haar false positive; avoid moving the
+        # camera based on just one uncertain frame.
+        if face_hits < 2:
             return False
-        positions = crop_positions(samples, width, height, out_width, out_height)
+        positions = crop_follow_path(samples, width, height, out_width, out_height)
         return write_tracking_commands(positions, output)
     except (ValueError, OSError, cv2.error):
         LOGGER.warning("Face tracking failed; using centered crop", exc_info=True)
