@@ -19,7 +19,7 @@ def test_all_workspace_pages_are_navigable():
         assert "ClipForge" in response.text
         assert 'href="/settings"' in response.text
     assert "Custom amount" in client.get("/studio").text
-    assert "Contextual on-screen text" in client.get("/studio").text
+    assert "Optional scene context" in client.get("/studio").text
 
 
 def test_guided_creation_flow_is_backed_by_real_framing_fields():
@@ -53,7 +53,7 @@ def test_settings_defaults_are_persisted_and_validated(tmp_path, monkeypatch):
     response = client.get("/api/settings")
     assert response.status_code == 200
     assert response.json()["defaults"]["max_clips"] == 5
-    assert response.json()["defaults"]["narration"] == "context"
+    assert response.json()["defaults"]["narration"] == "none"
     assert module.Options().narration == "none"  # API callers remain opt-in
 
     saved = {

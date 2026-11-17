@@ -342,6 +342,22 @@ def test_music_upload_accepts_audio_only_and_rejects_invalid_media(tmp_path, mon
     file_name = success.json()["music_file"]
     assert (folder / "music" / file_name).is_file()
     assert module._read(folder)["music_file"] == file_name
+    preview = client.get(f"/api/jobs/{job_id}/music/preview")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"].startswith("audio/wav")
+    assert preview.content == music.read_bytes()
+
+
+def test_music_preview_does_not_expose_unselected_or_malformed_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = _completed_job(tmp_path)
+    endpoint = f"/api/jobs/{job_id}/music/preview"
+    assert client.get(endpoint).status_code == 404
+    for unsafe in ["../settings.json", "source.mp4", "track-1.mp3"]:
+        job = module._read(folder)
+        job["music_file"] = unsafe
+        module._write(folder, job)
+        assert client.get(endpoint).status_code == 404
 
 
 def test_revision_validations_no_paid_tts_without_approval(tmp_path, monkeypatch):
@@ -434,6 +450,9 @@ def test_editor_is_in_library_and_studio_contains_hook_controls():
     assert 'id="view-library"' in page
     assert 'id="hook-style"' in page
     assert 'id="settings-hook-style"' in page
+    assert '<option value="none" selected>No script' in page
     script = client.get("/assets/app.js").text
     assert "buildClipEditor" in script
     assert "/edit" in script
+    assert "libraryAddMusic" in script
+    assert "/music/preview" in script

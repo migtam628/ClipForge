@@ -188,10 +188,14 @@ a.brand{color:inherit;text-decoration:none}
 .timeline-music-rail{min-height:32px;background:#2c2845;border-color:#6a4c87;
   color:#dfc9ef;display:flex;align-items:center;padding:0 10px}
 .timeline-music-panel{display:flex;flex-wrap:wrap;gap:8px 14px;
-  align-items:center;margin:8px 0 16px}
+  align-items:center;margin:8px 0 16px;padding:14px;border:1px solid #65728d;
+  border-radius:12px;background:#1c2940;scroll-margin-top:20px;transition:border-color .2s,box-shadow .2s}
+.timeline-music-panel.music-focus{border-color:#b5d7ff;box-shadow:0 0 0 3px #8cbfff55}
+.timeline-music-heading{width:100%;font-size:14px;color:#f3f6fc}
 .timeline-music-panel .clip-edit-consent{margin:0}
 .timeline-music-input{max-width:280px;min-width:150px;color:#d9dfec;font-size:11px}
-.timeline-music-panel .helper-note{margin:0!important;font-size:11px!important}
+.timeline-music-panel .helper-note{margin:0!important;font-size:11px!important;width:100%}
+.timeline-music-preview{width:min(100%,420px);height:42px}
 @media(max-width:930px){
   .timeline-workspace,.clip-editor.timeline-expanded .timeline-workspace{grid-template-columns:1fr}
   .timeline-source-monitor{height:290px}

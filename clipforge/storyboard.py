@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 from clipforge.ai import _setting
 from clipforge.recovery import load_json, save_json
 
-VERSION = 6  # review generated beats and preserve overlay line boundaries
+VERSION = 7  # abstain from unsupported or unnecessary contextual overlays
 # Keep v3 frame observations usable after the script-generation fix. The frame
 # sampling, vision model prompts and cache format have not changed.
 FRAME_CACHE_VERSION = 3
@@ -448,6 +448,66 @@ def _script_review_flags(beats: list[dict], evidence: list[dict],
     return sorted(warnings)
 
 
+# A deliberately conservative check: a contextual overlay is optional. If it
+# cannot be tied back to this *specific* window, leaving the original footage
+# alone is better than showing an invented label. These small bilingual stop
+# lists are not a semantic fact checker; manual editorial review is still needed.
+_OVERLAY_STOP_WORDS = {
+    "a", "an", "the", "and", "or", "of", "in", "on", "at", "to", "from",
+    "for", "with", "by", "is", "are", "was", "were", "it", "its", "this",
+    "that", "they", "their", "there", "as", "about", "into", "has", "have",
+    "de", "del", "el", "la", "las", "los", "en", "un", "una", "unos",
+    "unas", "y", "o", "por", "para", "con", "es", "son", "que", "se",
+    "su", "sus", "al", "lo", "como", "sobre", "esta", "este", "hay",
+}
+
+
+def _meaningful_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"\b\w+\b", value.casefold(), re.UNICODE)
+        if len(token) >= 3 and token not in _OVERLAY_STOP_WORDS
+    }
+
+
+def _useful_context_label(beat: dict, window: dict, seen: set[str]) -> bool:
+    """Accept only distinct, complete labels with strong lexical source support.
+
+    False negatives are intentional: users can always edit or enable captions,
+    while an inaccurate AI overlay would already be burned into their video.
+    """
+    value = str(beat.get("text", "")).strip()
+    if not value or beat.get("generation") == "source_excerpt":
+        return False
+    words = re.findall(r"\b\w+\b", value.casefold(), re.UNICODE)
+    if len(words) < 3 or len(words) > 10:
+        return False
+    if re.search(
+        r"\b(?:a|an|the|of|in|with|for|to|and|or|from|on|at|"
+        r"de|del|en|con|para|por|un|una|y|o|que|sobre|el|la|los|las)"
+        r"\s*[.!?…]*$", value, re.IGNORECASE,
+    ):
+        return False
+    normalized = " ".join(words)
+    if normalized in seen:
+        return False
+    speech_words = " ".join(re.findall(
+        r"\b\w+\b", str(window.get("speech", "")).casefold(), re.UNICODE,
+    ))
+    if len(words) >= 5 and normalized in speech_words:
+        return False  # Captions can show the spoken words; no duplicate label.
+    key_terms = _meaningful_tokens(value)
+    source_terms = _meaningful_tokens(
+        str(window.get("frame_observation", "")) + " " +
+        str(window.get("speech", ""))
+    )
+    if len(key_terms) < 2 or len(key_terms & source_terms) < 2:
+        return False
+    if len(key_terms & source_terms) / len(key_terms) < 0.6:
+        return False
+    seen.add(normalized)
+    return True
+
+
 def build_storyboard(
     transcript: list[dict], source_start: float, duration: float,
     style: str, language: str, checkpoint: Path,
@@ -529,6 +589,21 @@ def build_storyboard(
                           if purpose == "overlay" else
                           max(3, min(24, int((entry["end"] - entry["start"]) * 2.1)))),
         })
+    if purpose == "overlay" and (
+        (basis == "video" and not any(w["frame_observation"] for w in evidence))
+        or not any(w["speech"] or w["frame_observation"] for w in evidence)
+    ):
+        # Context is an optional decoration, not a prerequisite for a clip.
+        # Missing evidence must never turn a valid original video into a failed
+        # job or produce fake text to fill the gap.
+        return {
+            "script": "", "beats": [],
+            "script_review_flags": ["no_reliable_scene_evidence"],
+            "analysis_basis": "video_frames_unavailable" if basis == "video"
+            else "speech_unavailable",
+            "frame_samples": 0, "frame_sample_failures": frame_sample_failures,
+            "script_fallbacks": 0,
+        }
     if basis == "video" and not any(w["frame_observation"] for w in evidence):
         raise RuntimeError(
             "No video frames could be analyzed. Source video may be slow or "
@@ -652,14 +727,26 @@ def build_storyboard(
             else "frame" if window["frame_observation"] else "speech" if window["speech"]
             else "none",
         })
-    if not any(beat["text"] for beat in beats):
+    review_flags = _script_review_flags(beats, evidence, purpose)
+    if purpose == "overlay":
+        seen_labels: set[str] = set()
+        suppressed = 0
+        for beat, window in zip(beats, evidence):
+            if beat["text"] and not _useful_context_label(beat, window, seen_labels):
+                beat["text"] = ""
+                beat["generation"] = "suppressed_unverified"
+                suppressed += 1
+        if suppressed:
+            review_flags.append("unverified_context_suppressed")
+            review_flags.sort()
+    if purpose != "overlay" and not any(beat["text"] for beat in beats):
         raise RuntimeError("No evidence-grounded narration could be written")
     storyboard = {
         "script": ("\n" if purpose == "overlay" else " ").join(
             beat["text"] for beat in beats if beat["text"]
         )[:1200],
         "beats": beats,
-        "script_review_flags": _script_review_flags(beats, evidence, purpose),
+        "script_review_flags": review_flags,
         "analysis_basis": (
             "video_frames_partial_and_speech" if frame_sample_failures
             else "video_frames_and_speech"
