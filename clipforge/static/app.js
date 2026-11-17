@@ -896,6 +896,13 @@ function buildClipEditor(job, clip) {
   const cutList = el('div', 'timeline-cut-list');
   const cutNotice = el('p', 'helper-note',
     'Drag numbered blocks to reorder, or use the arrow buttons.');
+  const sceneProgress = el('p', 'helper-note', '');
+  sceneProgress.setAttribute('role', 'status');
+  const sceneMeter = el('progress', 'timeline-scene-meter');
+  sceneMeter.max = 100;
+  sceneMeter.value = 0;
+  sceneMeter.hidden = true;
+  sceneMeter.setAttribute('aria-label', 'Scene analysis progress');
   const cutLabel = el('strong', '', 'V2 · Cut & reorder');
   const sceneEvidence = el('div', 'timeline-scene-evidence');
   function cutButton(text, action) {
@@ -973,8 +980,7 @@ function buildClipEditor(job, clip) {
       cutList.append(row);
     }
   };
-  cutControls.append(
-    cutButton('✦ Detect scene changes', async () => {
+  const detectSceneButton = cutButton('✦ Detect scene changes', async () => {
       const begin = Number(start.value), length = Number(duration.value);
       if (!Number.isFinite(begin) || !Number.isFinite(length) || length < 3 ||
           length > 120 || begin < 0 || begin + length > totalSeconds + 0.05)
@@ -982,16 +988,46 @@ function buildClipEditor(job, clip) {
       if (cutsActive && cuts.length > 1 &&
           !window.confirm('Replace your current unsaved cut sequence with detected scenes?'))
         return;
-      cutNotice.textContent = 'Inspecting visual scene changes… This can take a minute on a CPU server.';
+      detectSceneButton.disabled = true;
+      sceneProgress.textContent = '0% · Queued for visual scene analysis…';
+      sceneMeter.hidden = false;
+      sceneMeter.value = 0;
       try {
         const response = await fetch(`/api/jobs/${job.id}/clips/${clip.number}/scene-cuts`, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({start: begin, duration: length})
+          body: JSON.stringify({start: begin, duration: length, async: true})
         });
-        const result = await response.json();
+        let result = await response.json();
         if (!response.ok) throw new Error(typeof result.detail === 'string'
           ? result.detail : 'Scene detection failed');
+        if (response.status === 202) {
+          const statusUrl = result.status_url;
+          const deadline = Date.now() + 180000;
+          while (Date.now() < deadline) {
+            await new Promise(resolve => window.setTimeout(resolve, 1000));
+            const poll = await fetch(statusUrl, {cache: 'no-store'});
+            if (!poll.ok) throw new Error('Unable to read scene scan progress');
+            const status = await poll.json();
+            sceneProgress.textContent = `${status.progress || 0}% · ${status.stage || 'Analyzing'}`;
+            sceneMeter.value = Math.min(100, Math.max(0, Number(status.progress) || 0));
+            if (status.state === 'failed') throw new Error(status.error || 'Scene scan failed');
+            if (status.state === 'completed') {
+              result = status.result;
+              break;
+            }
+          }
+          if (!result || !Array.isArray(result.cuts))
+            throw new Error('Scene scan is taking longer than expected. Check progress and retry.');
+        }
         const detectedCuts = result.cuts || [];
+        sceneMeter.value = 100;
+        sceneProgress.textContent = result.warning
+          ? `Scan ${result.analysis_status || 'complete'} · ${result.warning}`
+          : `${result.cached ? 'Cached' : 'Scan complete'} · Review detected cuts before exporting.`;
+        if (result.analysis_status === 'partial') {
+          sceneEvidence.replaceChildren(el('p', 'helper-note', result.warning));
+          return notify('Visual scan was incomplete. Your existing cuts were preserved.');
+        }
         if (!detectedCuts.length && !(result.auto_edit?.segments?.length > 1)) {
           drawCuts();
           sceneEvidence.replaceChildren();
@@ -1059,10 +1095,14 @@ function buildClipEditor(job, clip) {
         }
         notify(`Found ${detectedCuts.length} visual scene changes. Review suggestions before rendering.`);
       } catch (error) {
-        drawCuts();
+        sceneProgress.textContent = `Scene analysis: ${error.message}`;
         notify(error.message);
+      } finally {
+        detectSceneButton.disabled = false;
       }
-    }),
+    });
+  cutControls.append(
+    detectSceneButton,
     cutButton('✂ Split at playhead', () => {
       const at = Number(sourceVideo.currentTime);
       const index = cutsActive && cuts[selectedCut] &&
@@ -1121,7 +1161,8 @@ function buildClipEditor(job, clip) {
     }
   });
   ruler.addEventListener('input', () => { previewingCuts = false; });
-  cutPanel.append(cutLabel, cutControls, sequenceRail, cutList, cutNotice, sceneEvidence);
+  cutPanel.append(cutLabel, cutControls, sequenceRail, cutList, cutNotice,
+    sceneProgress, sceneMeter, sceneEvidence);
   drawCuts();
   timeline.append(monitor, tracks);
   form.append(timeline, cutPanel);

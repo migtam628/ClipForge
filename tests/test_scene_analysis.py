@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,8 +40,11 @@ def test_scene_cut_cache_reuses_visual_detection_and_rebuilds_speech(tmp_path, m
     source = tmp_path / "source.mp4"
     source.write_bytes(b"example")
     calls = []
-    monkeypatch.setattr(scene_analysis, "detect_scene_cuts",
-                        lambda *_args: (calls.append(True) or [3.0, 7.0]))
+    monkeypatch.setattr(scene_analysis, "_detect_scene_details",
+                        lambda *_args, **_kwargs: (calls.append(True) or {
+                            "cuts": [3.0, 7.0], "method": "keyframe_difference",
+                            "analysis_status": "coarse", "warning": "Review approximate cuts",
+                        }))
     checkpoint = tmp_path / "cuts.json"
     first = scene_analysis.inspect_scene_range(
         source, [{"start": 0, "end": 4, "text": "Talking about camera angles"}],
@@ -52,6 +56,8 @@ def test_scene_cut_cache_reuses_visual_detection_and_rebuilds_speech(tmp_path, m
     )
     assert len(calls) == 1
     assert not first["cached"] and second["cached"]
+    assert second["method"] == "keyframe_difference"
+    assert second["warning"] == "Review approximate cuts"
     assert len(first["scenes"]) == 3
     assert "camera angles" in first["scenes"][0]["speech_excerpt"]
     assert "different spoken" in second["scenes"][2]["speech_excerpt"]
@@ -83,7 +89,10 @@ def test_scene_visual_draft_is_explicitly_unverified_and_cached(tmp_path, monkey
 
     source = tmp_path / "source.mp4"
     source.write_bytes(b"example")
-    monkeypatch.setattr(scene_analysis, "detect_scene_cuts", lambda *_: [5.0])
+    monkeypatch.setattr(scene_analysis, "_detect_scene_details", lambda *_, **__: {
+        "cuts": [5.0], "method": "sampled_frame_difference",
+        "analysis_status": "complete", "warning": None,
+    })
     calls = []
     monkeypatch.setattr(storyboard, "_visual_evidence", lambda *_args: (
         calls.append(True) or "A person appears in a room."))
@@ -134,6 +143,119 @@ def test_scene_range_rejects_invalid_inputs(tmp_path):
         scene_analysis.detect_scene_cuts(source, 0, 10, threshold=float("nan"))
 
 
+def test_keyframe_pass_stops_before_expensive_detailed_pass(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"example")
+    calls = []
+
+    def fake_scan(_source, _start, _duration, _threshold, *, keyframes_only, timeout):
+        calls.append((keyframes_only, timeout))
+        return [3.0] if keyframes_only else [4.0]
+
+    monkeypatch.setattr(scene_analysis, "_scan_frames", fake_scan)
+    report = scene_analysis._detect_scene_details(source, 0, 10)
+    assert report["cuts"] == [3.0]
+    assert report["analysis_status"] == "coarse"
+    assert calls == [(True, 10)]
+
+
+def test_detailed_fallback_after_empty_keyframes(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"example")
+    calls = []
+
+    def fake_scan(_source, _start, _duration, _threshold, *, keyframes_only, timeout):
+        calls.append(keyframes_only)
+        return [] if keyframes_only else [5.0]
+
+    monkeypatch.setattr(scene_analysis, "_scan_frames", fake_scan)
+    report = scene_analysis._detect_scene_details(source, 0, 10)
+    assert report["cuts"] == [5.0]
+    assert report["analysis_status"] == "complete"
+    assert calls == [True, False]
+
+
+def test_two_timeout_passes_return_incomplete_not_false_no_cuts(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"example")
+    calls = []
+
+    def time_out(_source, _start, _duration, _threshold, *, keyframes_only, timeout):
+        calls.append((keyframes_only, timeout))
+        raise TimeoutError("slow decoder")
+
+    monkeypatch.setattr(scene_analysis, "_scan_frames", time_out)
+    checkpoint = tmp_path / "cuts.json"
+    result = scene_analysis.inspect_scene_range(source, [], 177.66, 10, checkpoint)
+    assert result["analysis_status"] == "partial"
+    assert "no reliable cut list" in result["warning"]
+    assert not checkpoint.exists()
+    assert calls == [(True, 10), (False, 12)]
+
+
+def test_async_scene_api_reports_progress_and_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = module._create("upload", module.Options(), "async test")
+    (folder / "source.mp4").write_bytes(b"sample")
+    module._patch(folder, status="completed", source_file="source.mp4",
+                  duration=60, clips=[{"number": 1, "start": 5, "duration": 20}])
+
+    def fake_inspect(_source, _transcript, _start, _duration, _checkpoint, *, progress=None):
+        if progress:
+            progress(20, "Scanning video keyframes")
+            progress(90, "Preparing scene evidence")
+        return {"cuts": [10.0], "scenes": [{"start": 5.0, "duration": 5.0}],
+                "analysis_status": "coarse", "warning": "Review approximate cuts"}
+
+    monkeypatch.setattr(module, "inspect_scene_range", fake_inspect)
+    endpoint = f"/api/jobs/{job_id}/clips/1/scene-cuts"
+    created = client.post(endpoint, json={"start": 5, "duration": 10, "async": True})
+    assert created.status_code == 202
+    status = None
+    for _ in range(100):
+        status = client.get(created.json()["status_url"])
+        if status.json().get("state") == "completed":
+            break
+        time.sleep(0.01)
+    assert status is not None and status.status_code == 200
+    assert status.json()["state"] == "completed"
+    assert status.json()["progress"] == 100
+    assert status.json()["result"]["cuts"] == [10.0]
+    assert "token" not in status.json()
+    assert client.post(endpoint, json={"start": 5, "duration": 10, "async": True,
+                                       "vision_scene": 0}).status_code == 422
+
+
+def test_sync_scene_api_returns_review_warning_when_both_passes_time_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = module._create("upload", module.Options(), "slow media")
+    (folder / "source.mp4").write_bytes(b"sample")
+    module._patch(folder, status="completed", source_file="source.mp4",
+                  duration=210, clips=[{"number": 1, "start": 177.66, "duration": 30}])
+
+    def timeout_scan(*_args, **_kwargs):
+        raise TimeoutError("decoder too slow")
+
+    monkeypatch.setattr(scene_analysis, "_scan_frames", timeout_scan)
+    result = client.post(f"/api/jobs/{job_id}/clips/1/scene-cuts",
+                         json={"start": 177.66, "duration": 10})
+    assert result.status_code == 200
+    assert result.json()["analysis_status"] == "partial"
+    assert "Try a shorter selection" in result.json()["warning"]
+    assert result.json()["cuts"] == []
+
+
+def test_restart_marks_interrupted_scene_task_retryable(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = module._create("upload", module.Options(), "restart test")
+    checkpoint = module._scene_task_path(folder, 1)
+    module.save_json(checkpoint, {"state": "running", "progress": 20, "token": "test"})
+    module._recover_interrupted_scene_tasks()
+    status = module.load_json(checkpoint)
+    assert status["state"] == "failed"
+    assert "restart" in status["error"].lower()
+
+
 def test_ffmpeg_detects_a_real_shot_transition(tmp_path):
     source = tmp_path / "two-scenes.mp4"
     subprocess.run([
@@ -147,3 +269,16 @@ def test_ffmpeg_detects_a_real_shot_transition(tmp_path):
     assert any(1.5 <= cut <= 2.5 for cut in cuts), cuts
     shifted = scene_analysis.detect_scene_cuts(source, 0.75, 3, threshold=0.15)
     assert any(1.5 <= cut <= 2.5 for cut in shifted), shifted
+
+
+def test_scene_scan_seeks_into_long_source_without_scanning_entire_video(tmp_path):
+    source = tmp_path / "long-source.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
+        "-f", "lavfi", "-i", "color=c=red:s=160x90:r=2:d=179",
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=2:d=7",
+        "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map", "[v]", "-c:v", "mpeg4", "-q:v", "4", str(source),
+    ], capture_output=True, check=True, timeout=30)
+    cuts = scene_analysis.detect_scene_cuts(source, 177.66, 8, threshold=0.15)
+    assert any(178.5 <= cut <= 179.5 for cut in cuts), cuts

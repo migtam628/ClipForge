@@ -185,6 +185,9 @@ a.brand{color:inherit;text-decoration:none}
   white-space:nowrap;text-overflow:ellipsis;background:#274d69;color:#f2f6fd}
 .timeline-cut-row button.active:first-child{border-color:#d4f268;background:#385f70}
 .timeline-cut-panel .helper-note{margin-top:9px!important}
+.timeline-scene-meter{display:block;width:100%;height:7px;margin:7px 0 10px;
+  accent-color:#d4f268}
+.timeline-scene-meter[hidden]{display:none}
 .timeline-scene-evidence{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .timeline-scene-evidence>strong{font-size:12px;color:#dce8fa}
 .timeline-scene-evidence-row{display:flex;gap:8px;align-items:flex-start;text-align:left;

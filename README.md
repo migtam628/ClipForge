@@ -338,6 +338,27 @@ reorders excerpts from **one source**; independent video layers, waveform
 editing, transitions, and drag-and-drop between different source files remain
 future work.
 
+### CPU-safe scene analysis and editor progress
+
+**Detect scene changes** submits a background analysis task and displays its
+current stage and completion percentage. The backend first scans video
+keyframes with a bounded CPU budget; when this finds no transitions, it tries a
+second, sampled-frame pass with another deadline. Keyframe-only suggestions are
+marked **coarse** because changes between keyframes may be missed. If the
+detailed pass runs out of CPU time, the result is marked **partial**, with a
+warning and **no automatic replacement of your current timeline cuts**.
+These scans identify visual changes, not semantic actions or verified objects;
+all proposed edits still need manual preview.
+
+API clients can preserve the original synchronous request with
+`POST /api/jobs/{job_id}/clips/{number}/scene-cuts` and the usual `start` and
+`duration`. The editor uses `{ "async": true }` in that request, receives an
+HTTP 202 response containing `status_url`, then polls that GET URL for
+`state`, stage-based `progress` (0–100), and `result` or `error`. A server
+restart marks interrupted scene scans as failed so the user can retry. The
+dedicated scene worker does not occupy the primary clip render queue. These
+percentages represent processing stages, not a measured frame-level ETA.
+
 ## Creator-directed clip discovery and publishing drafts (v0.10)
 
 The **AI editor** now accepts a bounded, explicit instruction such as "Find

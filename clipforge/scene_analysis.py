@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -16,18 +17,13 @@ from pathlib import Path
 
 from clipforge.recovery import load_json, save_json
 
-VERSION = 2
+VERSION = 3
 MAX_SCENES = 12
 _TIMESTAMP = re.compile(r"\bpts_time:\s*([+-]?\d+(?:\.\d+)?)\b")
+LOGGER = logging.getLogger("uvicorn.error")
 
 
-def detect_scene_cuts(source: Path, start: float, duration: float,
-                      *, threshold: float = 0.28) -> list[float]:
-    """Return absolute source times for clear shot changes, max 11 boundaries.
-
-    Detection runs only against the selected 3–120s range, not an entire
-    multi-hour source. Scaling and frame decimation bound intermediate memory.
-    """
+def _validate_range(source: Path, start: float, duration: float, threshold: float) -> None:
     if not source.is_file():
         raise FileNotFoundError("Original source is unavailable")
     if not (math.isfinite(start) and math.isfinite(duration)
@@ -35,22 +31,38 @@ def detect_scene_cuts(source: Path, start: float, duration: float,
         raise ValueError("Scene analysis requires a valid 3–120 second range")
     if not math.isfinite(threshold) or not 0.1 <= threshold <= 0.9:
         raise ValueError("Invalid visual scene threshold")
+
+
+def _scan_frames(source: Path, start: float, duration: float, threshold: float,
+                 *, keyframes_only: bool, timeout: int) -> list[float]:
+    """Use input seeking and at most two decode threads on constrained hosts."""
     command = [
-        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "info", "-ss",
-        f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
-        "-an", "-vf",
-        f"scale=160:-2,fps=3,select=gt(scene\\,{threshold:.2f}),showinfo",
-        "-fps_mode", "vfr", "-f", "null", "-",
+        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "info",
+        "-filter_threads", "1", "-threads", "2",
     ]
+    if keyframes_only:
+        command.extend(["-skip_frame", "nokey"])
+    command.extend([
+        "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
+        "-an", "-vf", (
+            f"scale=160:-2,select=gt(scene\\,{threshold:.2f}),showinfo"
+            if keyframes_only else
+            f"fps=2,scale=160:-2,select=gt(scene\\,{threshold:.2f}),showinfo"
+        ),
+        "-fps_mode", "vfr", "-f", "null", "-",
+    ])
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True,
-            timeout=min(180, max(25, math.ceil(duration * 2.5))), check=True,
+            command, capture_output=True, text=True, timeout=timeout, check=True,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("Scene detection timed out; shorten the selected range") from exc
+        LOGGER.warning("Scene detection %s pass exceeded %ss for %.1fs selection",
+                       "keyframe" if keyframes_only else "sampled-frame", timeout, duration)
+        raise TimeoutError("Visual scan exceeded its CPU time budget") from exc
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError("Unable to detect cuts in this source video") from exc
+        LOGGER.warning("Scene detection %s pass could not decode source (FFmpeg exit %s)",
+                       "keyframe" if keyframes_only else "sampled-frame", exc.returncode)
+        raise RuntimeError("Unable to decode video for scene detection") from exc
 
     found: list[float] = []
     for line in result.stderr.splitlines():
@@ -70,6 +82,56 @@ def detect_scene_cuts(source: Path, start: float, duration: float,
         if len(found) == MAX_SCENES - 1:
             break
     return found
+
+
+def _detect_scene_details(source: Path, start: float, duration: float,
+                          *, threshold: float = 0.28, progress=None) -> dict:
+    """Try cheap keyframe analysis first; only do a full scan when needed.
+
+    Neither pass runs without a deadline. A timed-out detailed pass returns an
+    explicitly incomplete review result, not a misleading 'zero scene cuts'.
+    """
+    _validate_range(source, start, duration, threshold)
+    fast_timeout = min(35, max(10, math.ceil(duration * 0.8)))
+    detail_timeout = min(60, max(12, math.ceil(duration * 1.2)))
+    fast_cuts: list[float] = []
+    fast_error: Exception | None = None
+    if progress:
+        progress(20, "Scanning video keyframes")
+    try:
+        fast_cuts = _scan_frames(source, start, duration, threshold,
+                                keyframes_only=True, timeout=fast_timeout)
+    except (TimeoutError, RuntimeError) as exc:
+        fast_error = exc
+    if fast_cuts:
+        return {
+            "cuts": fast_cuts, "method": "keyframe_difference", "analysis_status": "coarse",
+            "warning": "Keyframe-level cuts are approximate; review footage for transitions between keyframes.",
+        }
+
+    if progress:
+        progress(60, "Checking additional sampled frames")
+    try:
+        detailed_cuts = _scan_frames(source, start, duration, threshold,
+                                    keyframes_only=False, timeout=detail_timeout)
+    except TimeoutError:
+        return {
+            "cuts": [], "method": "bounded_frame_difference", "analysis_status": "partial",
+            "warning": "Scene scan reached its CPU time limit; no reliable cut list was produced. "
+                       "Try a shorter selection or split manually.",
+        }
+    except RuntimeError:
+        if fast_error is not None:
+            raise RuntimeError("Both keyframe and sampled-frame scans could not decode this video")
+        raise
+    return {"cuts": detailed_cuts, "method": "sampled_frame_difference",
+            "analysis_status": "complete", "warning": None}
+
+
+def detect_scene_cuts(source: Path, start: float, duration: float,
+                      *, threshold: float = 0.28) -> list[float]:
+    """Return up to eleven reviewable shot boundaries within the selected range."""
+    return _detect_scene_details(source, start, duration, threshold=threshold)["cuts"]
 
 
 def scene_evidence(transcript: list[dict], start: float, duration: float,
@@ -184,7 +246,7 @@ def _visual_draft(source: Path, scene: dict, checkpoint: Path) -> dict:
 
 def inspect_scene_range(source: Path, transcript: list[dict], start: float,
                         duration: float, checkpoint: Path,
-                        *, vision_scene: int | None = None) -> dict:
+                        *, vision_scene: int | None = None, progress=None) -> dict:
     """Cache visual boundaries across repeated editor requests for one source."""
     stat = source.stat()
     digest = hashlib.sha256(json.dumps([
@@ -194,17 +256,25 @@ def inspect_scene_range(source: Path, transcript: list[dict], start: float,
     saved = load_json(checkpoint)
     cached = False
     cuts = None
+    details = {"method": "sampled_frame_difference", "analysis_status": "complete", "warning": None}
     if isinstance(saved, dict) and saved.get("signature") == digest:
         cuts = saved.get("cuts")
         if (isinstance(cuts, list) and len(cuts) <= MAX_SCENES - 1
                 and all(type(t) is float and start < t < start + duration
                         for t in cuts)):
             cached = True
+            details = {"method": saved.get("method", "sampled_frame_difference"),
+                       "analysis_status": saved.get("analysis_status", "complete"),
+                       "warning": saved.get("warning")}
     if not cached:
-        cuts = detect_scene_cuts(source, start, duration)
-        save_json(checkpoint, {"signature": digest, "cuts": cuts})
+        details = _detect_scene_details(source, start, duration, progress=progress)
+        cuts = details["cuts"]
+        if details["analysis_status"] != "partial":
+            save_json(checkpoint, {"signature": digest, **details})
+    if progress:
+        progress(90, "Preparing scene evidence and pacing suggestions")
     scenes = scene_evidence(transcript, start, duration, cuts)
-    result = {"cuts": cuts, "scenes": scenes, "method": "frame_difference",
+    result = {"cuts": cuts, "scenes": scenes, **details,
               "cached": cached, "auto_edit": suggest_speech_pacing(transcript, start, duration)}
     if vision_scene is not None:
         if not 0 <= vision_scene < len(scenes):
