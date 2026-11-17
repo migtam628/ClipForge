@@ -59,6 +59,7 @@ from clipforge.narration import (
 from clipforge.publishing import platform_status, publish
 from clipforge.quality import inspect_rendered_clip, refine_speech_boundaries
 from clipforge.recovery import load_json, recover_source, save_json
+from clipforge.scene_analysis import inspect_scene_range
 from clipforge.smart_frame import plan_subject_tracking
 from clipforge.storyboard import build_storyboard, synthesize_timed_voice, vision_status
 
@@ -237,6 +238,9 @@ class ClipEditRequest(BaseModel):
     segments: list[TimelineCut] = Field(default_factory=list, max_length=12)
     music_enabled: bool = False
     music_volume: float = Field(default=0.25, ge=0, le=2)
+    music_fade_in: float = Field(default=0.5, ge=0, le=5, allow_inf_nan=False)
+    music_fade_out: float = Field(default=0.75, ge=0, le=5, allow_inf_nan=False)
+    music_ducking: bool = True
     brand_text: str = Field(default="", max_length=36)
     regenerate_storyboard: bool = False
     narration_basis: Literal["video", "speech"] = "video"
@@ -250,7 +254,17 @@ class ClipEditRequest(BaseModel):
             raise ValueError("Choose either contextual text or spoken story narration")
         if self.framing == "split" and self.aspect_ratio not in (None, "9:16"):
             raise ValueError("Split-screen framing requires the 9:16 vertical format")
+        if (self.music_enabled and
+                self.music_fade_in + self.music_fade_out > self.duration):
+            raise ValueError("Music fades cannot be longer than the clip")
         return self
+
+
+class SceneRangeRequest(BaseModel):
+    """Read-only bounded source interval for suggested editor scene cuts."""
+
+    start: float = Field(ge=0, allow_inf_nan=False)
+    duration: float = Field(ge=3, le=120, allow_inf_nan=False)
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -881,7 +895,7 @@ def get_settings():
     try:
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
             selection_mode="ai", caption_style="karaoke", effect="pop",
-            framing="smart", max_clips=5, hook_style="headline",
+            framing="smart", max_clips=5, hook_style="none",
             narration_basis="video", narration="none",
         )
     except ValueError:
@@ -1479,6 +1493,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             split_fill=edit.split_fill,
             source_volume=edit.source_volume, voice_volume=edit.voice_volume,
             music=music, music_volume=edit.music_volume,
+            music_fade_in=edit.music_fade_in,
+            music_fade_out=edit.music_fade_out,
+            music_ducking=edit.music_ducking,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1531,6 +1548,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "frame_sample_failures", "script_fallbacks",
                     "script_review_flags", "brand_text",
                     "segments", "music_enabled", "music_volume",
+                    "music_fade_in", "music_fade_out", "music_ducking",
                 )
             })
             target.update(
@@ -1570,6 +1588,9 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 voice_volume=edit.voice_volume,
                 segments=[part.model_dump() for part in edit.segments],
                 music_enabled=music is not None, music_volume=edit.music_volume,
+                music_fade_in=edit.music_fade_in,
+                music_fade_out=edit.music_fade_out,
+                music_ducking=edit.music_ducking,
                 post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
@@ -1702,6 +1723,33 @@ def preview_original_source(job_id: str):
         raise HTTPException(404, "The original source is no longer available")
     media_types = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
     return FileResponse(source, media_type=media_types.get(source.suffix.lower(), "application/octet-stream"))
+
+
+@app.post("/api/jobs/{job_id}/clips/{number}/scene-cuts")
+def find_clip_scene_cuts(job_id: str, number: int, body: SceneRangeRequest):
+    """Suggest bounded scene splits and verbatim speech evidence, never edit media."""
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Scene inspection requires a completed job")
+    clip = next((c for c in job.get("clips", []) if c.get("number") == number), None)
+    if clip is None:
+        raise HTTPException(404, "Clip not found")
+    if clip.get("revision_state") in {"queued", "rendering"}:
+        raise HTTPException(409, "Wait until this clip's edit has completed")
+    if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
+        raise HTTPException(422, "Scene range must remain inside the source video")
+    source = recover_source(folder, job)
+    if source is None or not source.is_file():
+        raise HTTPException(404, "Original source video is unavailable")
+    transcript = load_json(folder / "transcript.json")
+    try:
+        return inspect_scene_range(
+            source, transcript if isinstance(transcript, list) else [],
+            body.start, body.duration, folder / f"clip-{number:03d}-scene-cuts.json",
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/music", status_code=201)

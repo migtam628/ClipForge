@@ -223,12 +223,19 @@ def render_clip(
     split_fill: str = "cover",
     source_volume: float | None = None, voice_volume: float = 1.0,
     music: Path | None = None, music_volume: float = 0.25,
+    music_fade_in: float = 0.5, music_fade_out: float = 0.75,
+    music_ducking: bool = True,
 ) -> None:
     if source_volume is None:
         source_volume = 0.18 if voiceover is not None else 1.0
     if not all(math.isfinite(v) and 0 <= v <= 2
                for v in (source_volume, voice_volume, music_volume)):
         raise ValueError("Audio volumes must be finite values between 0 and 2")
+    if not all(math.isfinite(v) and 0 <= v <= 5
+               for v in (music_fade_in, music_fade_out)):
+        raise ValueError("Music fades must be between 0 and 5 seconds")
+    if music is not None and music_fade_in + music_fade_out > length:
+        raise ValueError("Music fades cannot be longer than the clip")
     size = OUTPUT_SIZES[ratio]
     w, h = size
     if framing == "split":
@@ -332,16 +339,42 @@ def render_clip(
         # but the final output is always bounded by -t.
         filters = []
         tracks = []
+        ducking = bool(music is not None and music_ducking and
+                       (has_source_audio or voiceover is not None))
+        duck_keys = []
         if has_source_audio:
-            filters.append(f"[0:a:0]volume={source_volume:.3f},asetpts=PTS-STARTPTS[bed]")
+            filters.append(f"[0:a:0]volume={source_volume:.3f},asetpts=PTS-STARTPTS" +
+                           (",asplit=2[bed][bedkey]" if ducking else "[bed]"))
             tracks.append("[bed]")
+            if ducking:
+                duck_keys.append("[bedkey]")
         if voiceover is not None:
-            filters.append(f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS[voice]")
+            filters.append(f"[1:a:0]volume={voice_volume:.3f},asetpts=PTS-STARTPTS" +
+                           (",asplit=2[voice][voicekey]" if ducking else "[voice]"))
             tracks.append("[voice]")
+            if ducking:
+                duck_keys.append("[voicekey]")
         if music is not None:
             index = 2 if voiceover is not None else 1
-            filters.append(f"[{index}:a:0]volume={music_volume:.3f},"
-                           f"atrim=duration={length:.3f},asetpts=PTS-STARTPTS[music]")
+            chain = (f"[{index}:a:0]volume={music_volume:.3f},"
+                     f"atrim=duration={length:.3f},asetpts=PTS-STARTPTS")
+            if music_fade_in:
+                chain += f",afade=t=in:st=0:d={music_fade_in:.3f}"
+            if music_fade_out:
+                chain += (f",afade=t=out:st={max(0.0, length - music_fade_out):.3f}:"
+                          f"d={music_fade_out:.3f}")
+            filters.append(chain + ("[musicraw]" if ducking else "[music]"))
+            if ducking:
+                if len(duck_keys) > 1:
+                    filters.append("".join(duck_keys) +
+                                   f"amix=inputs={len(duck_keys)}:normalize=0[duckkey]")
+                    key = "[duckkey]"
+                else:
+                    key = duck_keys[0]
+                filters.append(
+                    f"[musicraw]{key}sidechaincompress=threshold=0.06:ratio=8:"
+                    "attack=20:release=400:makeup=1[music]"
+                )
             tracks.append("[music]")
         if len(tracks) == 1:
             filters.append(f"{tracks[0]}anull[aout]")
