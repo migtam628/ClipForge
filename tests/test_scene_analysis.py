@@ -58,6 +58,49 @@ def test_scene_cut_cache_reuses_visual_detection_and_rebuilds_speech(tmp_path, m
     assert "camera angles" not in second["scenes"][2]["speech_excerpt"]
 
 
+def test_pacing_suggests_only_internal_long_pauses_and_keeps_ends():
+    transcript = [
+        {"start": 4, "end": 7, "text": "First reaction"},
+        {"start": 14, "end": 19, "text": "Next reaction"},
+        {"start": 21, "end": 27, "text": "Final reaction"},
+    ]
+    suggestion = scene_analysis.suggest_speech_pacing(transcript, 0, 30)
+    assert suggestion["review_required"] is True
+    assert suggestion["segments"] == [
+        {"start": 0, "duration": 7.5},
+        {"start": 13.5, "duration": 16.5},
+    ]
+    assert suggestion["removed_seconds"] == 6
+    assert scene_analysis.suggest_speech_pacing([], 0, 30)["segments"] == []
+    assert scene_analysis.suggest_speech_pacing([
+        {"start": 1, "end": 3, "text": "One"},
+        {"start": 3.5, "end": 6, "text": "Two"},
+    ], 0, 10)["segments"] == []
+
+
+def test_scene_visual_draft_is_explicitly_unverified_and_cached(tmp_path, monkeypatch):
+    from clipforge import storyboard
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"example")
+    monkeypatch.setattr(scene_analysis, "detect_scene_cuts", lambda *_: [5.0])
+    calls = []
+    monkeypatch.setattr(storyboard, "_visual_evidence", lambda *_args: (
+        calls.append(True) or "A person appears in a room."))
+    checkpoint = tmp_path / "scene.json"
+    first = scene_analysis.inspect_scene_range(
+        source, [], 0, 10, checkpoint, vision_scene=0)
+    second = scene_analysis.inspect_scene_range(
+        source, [], 0, 10, checkpoint, vision_scene=0)
+    assert len(calls) == 1
+    assert first["visual_draft"]["review_required"]
+    assert first["visual_draft"]["basis"] == "one_ai_described_video_frame"
+    assert not first["visual_draft"]["cached"]
+    assert second["visual_draft"]["cached"]
+    with pytest.raises(ValueError, match="Scene index"):
+        scene_analysis.inspect_scene_range(source, [], 0, 10, checkpoint, vision_scene=9)
+
+
 def test_scene_cuts_api_validates_job_clip_and_bounded_range(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "DATA_DIR", tmp_path)
     job_id, folder = module._create("upload", module.Options(), "test")
@@ -70,7 +113,7 @@ def test_scene_cuts_api_validates_job_clip_and_bounded_range(tmp_path, monkeypat
                        json={"start": 5, "duration": 20}).status_code == 404
     assert client.post(endpoint, json={"start": 5, "duration": 200}).status_code == 422
 
-    monkeypatch.setattr(module, "inspect_scene_range", lambda *_args: {
+    monkeypatch.setattr(module, "inspect_scene_range", lambda *_args, **_kwargs: {
         "cuts": [10.0], "scenes": [{"start": 5.0, "duration": 5.0,
                                   "speech_excerpt": "Source text"}],
         "method": "frame_difference", "cached": False,
@@ -78,6 +121,8 @@ def test_scene_cuts_api_validates_job_clip_and_bounded_range(tmp_path, monkeypat
     response = client.post(endpoint, json={"start": 5, "duration": 20})
     assert response.status_code == 200
     assert response.json()["cuts"] == [10]
+    assert client.post(endpoint, json={"start": 5, "duration": 20,
+                                       "vision_scene": -1}).status_code == 422
 
 
 def test_scene_range_rejects_invalid_inputs(tmp_path):

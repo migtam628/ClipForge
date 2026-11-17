@@ -50,6 +50,7 @@ from clipforge.engine import (
 from clipforge.environment import field_schema, validate_patch
 from clipforge.formats import OUTPUT_SIZES
 from clipforge.import_auth import youtube_cookie_status
+from clipforge.music_analysis import inspect_music_rhythm
 from clipforge.narration import (
     audio_duration,
     narration_status,
@@ -241,6 +242,7 @@ class ClipEditRequest(BaseModel):
     music_fade_in: float = Field(default=0.5, ge=0, le=5, allow_inf_nan=False)
     music_fade_out: float = Field(default=0.75, ge=0, le=5, allow_inf_nan=False)
     music_ducking: bool = True
+    music_start: float = Field(default=0, ge=0, le=300, allow_inf_nan=False)
     brand_text: str = Field(default="", max_length=36)
     regenerate_storyboard: bool = False
     narration_basis: Literal["video", "speech"] = "video"
@@ -265,6 +267,7 @@ class SceneRangeRequest(BaseModel):
 
     start: float = Field(ge=0, allow_inf_nan=False)
     duration: float = Field(ge=3, le=120, allow_inf_nan=False)
+    vision_scene: int | None = Field(default=None, ge=0, le=11)
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -1377,6 +1380,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             music = folder / "music" / music_filename
             if not music.is_file():
                 raise FileNotFoundError("Selected music file is unavailable")
+            if edit.music_start >= audio_duration(music):
+                raise ValueError("Music start must be inside the selected track")
 
         voiceover = None
         subtitles = None
@@ -1496,6 +1501,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
             music_fade_in=edit.music_fade_in,
             music_fade_out=edit.music_fade_out,
             music_ducking=edit.music_ducking,
+            music_start=edit.music_start,
         )
         os.replace(partial, destination)
         thumbnail_path = output / f"{base}.jpg"
@@ -1548,7 +1554,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "frame_sample_failures", "script_fallbacks",
                     "script_review_flags", "brand_text",
                     "segments", "music_enabled", "music_volume",
-                    "music_fade_in", "music_fade_out", "music_ducking",
+                    "music_fade_in", "music_fade_out", "music_ducking", "music_start",
                 )
             })
             target.update(
@@ -1591,6 +1597,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 music_fade_in=edit.music_fade_in,
                 music_fade_out=edit.music_fade_out,
                 music_ducking=edit.music_ducking,
+                music_start=edit.music_start,
                 post_copy=None, post_copy_state=None, post_copy_error=None,
                 revision_count=version, revision_history=history,
                 revision_state="completed", revision_error=None,
@@ -1664,6 +1671,9 @@ def edit_clip(job_id: str, number: int, body: ClipEditRequest):
             r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", job.get("music_file") or "",
         ):
             raise HTTPException(422, "Upload a music track before enabling the audio layer")
+        if body.music_enabled and isinstance(job.get("music_duration"), (int, float)):
+            if body.music_start >= job["music_duration"]:
+                raise HTTPException(422, "Music start must be inside the uploaded track")
         if (body.context_overlay and not body.manual_beats
                 and not body.regenerate_storyboard):
             raise HTTPException(422, "Review existing scene text or regenerate contextual labels")
@@ -1747,9 +1757,12 @@ def find_clip_scene_cuts(job_id: str, number: int, body: SceneRangeRequest):
         return inspect_scene_range(
             source, transcript if isinstance(transcript, list) else [],
             body.start, body.duration, folder / f"clip-{number:03d}-scene-cuts.json",
+            vision_scene=body.vision_scene,
         )
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/api/jobs/{job_id}/music", status_code=201)
@@ -1788,25 +1801,33 @@ async def upload_timeline_music(
         try:
             result = subprocess.run([
                 "ffprobe", "-v", "error", "-select_streams", "a:0",
-                "-show_entries", "stream=codec_type", "-of", "json",
+                "-show_entries", "stream=codec_type:format=duration", "-of", "json",
                 str(destination),
             ], capture_output=True, text=True, timeout=30, check=True)
-            streams = json.loads(result.stdout).get("streams", [])
+            metadata = json.loads(result.stdout)
+            streams = metadata.get("streams", [])
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
                 json.JSONDecodeError) as exc:
             raise HTTPException(422, "Unable to read the uploaded audio") from exc
         if not streams or streams[0].get("codec_type") != "audio":
             raise HTTPException(422, "File contains no playable audio stream")
+        try:
+            length = float(metadata.get("format", {}).get("duration"))
+            if not math.isfinite(length) or not 0 < length < 3600:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Music duration must be between 0 and 60 minutes") from None
         with LOCK:
             job = _read(folder)
             job["music_file"] = name
+            job["music_duration"] = round(length, 2)
             _write(folder, job)
     except Exception:
         destination.unlink(missing_ok=True)
         raise
     finally:
         await file.close()
-    return {"music_file": name, "bytes": size}
+    return {"music_file": name, "bytes": size, "duration": round(length, 2)}
 
 
 @app.get("/api/jobs/{job_id}/music/preview")
@@ -1827,6 +1848,27 @@ def preview_timeline_music(job_id: str):
     types = {".mp3": "audio/mpeg", ".m4a": "audio/mp4",
              ".wav": "audio/wav", ".ogg": "audio/ogg"}
     return FileResponse(audio, media_type=types[audio.suffix])
+
+
+@app.get("/api/jobs/{job_id}/music/rhythm")
+def preview_music_accents(job_id: str):
+    """Find approximate audio transients in the current job's selected track."""
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Music analysis requires a completed job")
+    filename = job.get("music_file")
+    if not isinstance(filename, str) or not re.fullmatch(
+        r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", filename,
+    ):
+        raise HTTPException(404, "No selected music track")
+    track = folder / "music" / filename
+    if not track.is_file():
+        raise HTTPException(404, "Selected music track is unavailable")
+    try:
+        return inspect_music_rhythm(track, folder / "music" / (filename + ".rhythm.json"))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/api/jobs/{job_id}/clips/{filename}")

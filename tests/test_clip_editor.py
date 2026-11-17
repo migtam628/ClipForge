@@ -340,12 +340,19 @@ def test_music_upload_accepts_audio_only_and_rejects_invalid_media(tmp_path, mon
     })
     assert success.status_code == 201, success.text
     file_name = success.json()["music_file"]
+    assert 0.7 < success.json()["duration"] < 0.9
     assert (folder / "music" / file_name).is_file()
     assert module._read(folder)["music_file"] == file_name
+    assert module._read(folder)["music_duration"] == success.json()["duration"]
     preview = client.get(f"/api/jobs/{job_id}/music/preview")
     assert preview.status_code == 200
     assert preview.headers["content-type"].startswith("audio/wav")
     assert preview.content == music.read_bytes()
+    too_late = client.post(f"/api/jobs/{job_id}/clips/1/edit", json={
+        "start": 5, "duration": 10, "music_enabled": True,
+        "music_start": 1.0,
+    })
+    assert too_late.status_code == 422
 
 
 def test_music_preview_does_not_expose_unselected_or_malformed_paths(tmp_path, monkeypatch):
@@ -463,18 +470,23 @@ def test_music_ducking_and_fades_generate_a_valid_audio_export(tmp_path):
     ], capture_output=True, check=True, timeout=30)
     render_clip(source, exported, 0, 3, "16:9", framing="pad", music=soundtrack,
                 music_volume=0.20, music_fade_in=0.5, music_fade_out=0.5,
-                music_ducking=True)
+                music_ducking=True, music_start=1.0)
     assert engine.probe(exported)["has_audio"] is True
     assert exported.stat().st_size > 500
     with pytest.raises(ValueError, match="Music fades"):
         render_clip(source, tmp_path / "bad.mp4", 0, 3, "16:9",
                     music=soundtrack, music_fade_in=2, music_fade_out=2)
+    with pytest.raises(ValueError, match="Music start"):
+        render_clip(source, tmp_path / "bad2.mp4", 0, 3, "16:9",
+                    music=soundtrack, music_start=float("nan"))
 
 
 def test_music_fade_validation_in_edit_request():
     with pytest.raises(ValueError, match="Music fades"):
         module.ClipEditRequest(start=0, duration=3, music_enabled=True,
                                music_fade_in=2, music_fade_out=2)
+    with pytest.raises(ValueError):
+        module.ClipEditRequest(start=0, duration=3, music_start=301)
 
 
 def test_editor_is_in_library_and_studio_contains_hook_controls():
@@ -488,3 +500,5 @@ def test_editor_is_in_library_and_studio_contains_hook_controls():
     assert "/edit" in script
     assert "libraryAddMusic" in script
     assert "/music/preview" in script
+    assert "Use music preview position" in script
+    assert "Suggest tighter pacing" in script
