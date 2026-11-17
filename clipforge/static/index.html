@@ -163,14 +163,14 @@
           </div></div>
           </div>
           <div class="journey-panel" data-journey-panel="3" hidden>
-          <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Video text &amp; storytelling</h2><p>Add useful context on screen; spoken storytelling is optional</p></div></div>
+          <div class="settings-heading ai-heading"><span class="step">04</span><div><h2>Video text &amp; storytelling</h2><p>A good clip doesn't always need a script. Keep the original by default.</p></div></div>
           <div class="settings-grid">
-            <div class="field"><label for="narration">Text &amp; voice</label><select id="narration"><option value="context" selected>Contextual on-screen text · original audio</option><option value="none">Original video only · no added text</option><option value="script">Save timed script only · not burned in</option><option value="narrated">Story narration + voiceover</option></select></div>
+            <div class="field"><label for="narration">Text &amp; voice</label><select id="narration"><option value="none" selected>No script · keep original video and audio</option><option value="context">Optional scene context · skip unsupported labels</option><option value="script">Draft timed video script · review before use</option><option value="narrated">Story narration + voiceover · use for stories only</option></select></div>
             <div class="field"><label for="narration-style">Writing style</label><select id="narration-style"><option value="energetic">Energetic / short-form</option><option value="documentary">Documentary / informative</option><option value="casual">Casual / conversational</option></select></div>
             <div class="field"><label for="narration-language">Text language</label><select id="narration-language"><option value="en">English</option><option value="es">Spanish</option></select></div>
             <div class="field"><label for="narration-basis">Video evidence</label><select id="narration-basis"><option value="video" selected>Analyze video frames + spoken words</option><option value="speech">Spoken words only · no vision model</option></select></div>
           </div>
-          <p class="helper-note" id="narration-notice">Short contextual labels appear during the relevant moments. Your original audio stays unchanged.</p>
+          <p class="helper-note" id="narration-notice">Your clip keeps its original audio and won't receive an AI script unless you choose one. Add licensed background music from its Library timeline editor after generation.</p>
           <div class="ai-notice" id="ai-notice">AI selection and scripts use a local Ollama model. Voiceover is an optional external service.</div>
           <div class="journey-review" id="journey-review" role="status"></div>
           <label class="rights"><input type="checkbox" id="rights"><span>I own or have permission to download, edit and republish this video.</span></label>

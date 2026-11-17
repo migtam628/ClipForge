@@ -592,11 +592,11 @@ function updateNarrationNotice() {
   if (mode === 'narrated') {
     note.textContent = 'For story-like videos: a scene-by-scene spoken voiceover. ElevenLabs may charge per section; original audio is lowered under the narrator.';
   } else if (mode === 'context') {
-    note.textContent = 'Adds short on-screen context tied to each video scene. Keeps original audio untouched. Unlike subtitles, these labels describe the moment instead of repeating dialogue.';
+    note.textContent = 'AI adds scene labels only when supported by the actual clip. It skips uncertain, repetitive, or unfinished labels; some clips need no extra text. Original audio stays intact.';
   } else if (mode === 'script') {
-    note.textContent = 'Saves a timestamped text script for review or copying. It is not burned into the video and no voice is generated.';
+    note.textContent = 'Draft a timestamped script using the clip’s frames and dialogue. Review and rewrite it before publishing; it is not burned into the video.';
   } else {
-    note.textContent = 'Use original video audio. No AI script or external text-to-speech charge.';
+    note.textContent = 'No script or added scene labels. Preserve the original video and audio. You can still add licensed background music in the Library editor.';
   }
 }
 
@@ -1187,6 +1187,12 @@ function buildClipEditor(job, clip) {
   musicUpload.setAttribute('aria-label', 'Upload music track');
   const musicStatus = el('span', 'helper-note', musicReady
     ? 'Music track available on this job' : 'No music uploaded');
+  const musicPreview = el('audio', 'timeline-music-preview');
+  musicPreview.controls = true;
+  musicPreview.preload = 'none';
+  musicPreview.setAttribute('aria-label', 'Preview the selected music track');
+  musicPreview.hidden = !musicReady;
+  if (musicReady) musicPreview.src = `/api/jobs/${job.id}/music/preview`;
   musicUpload.addEventListener('change', async () => {
     const file = musicUpload.files?.[0];
     if (!file) return;
@@ -1208,6 +1214,8 @@ function buildClipEditor(job, clip) {
       musicReady = true;
       musicEnabled.checked = true;
       musicStatus.textContent = 'Music ready · ' + file.name;
+      musicPreview.src = `/api/jobs/${job.id}/music/preview?v=${Date.now()}`;
+      musicPreview.hidden = false;
       notify('Music saved for this job. It will be mixed when you render.');
     } catch (error) {
       musicStatus.textContent = 'Music upload failed';
@@ -1216,7 +1224,9 @@ function buildClipEditor(job, clip) {
       musicUpload.disabled = false;
     }
   });
-  musicPanel.append(musicToggle, musicRightsRow, musicUpload, musicStatus);
+  musicPanel.append(el('strong', 'timeline-music-heading', '♬ Add background music'),
+    el('span', 'helper-note', 'Choose a licensed MP3, M4A, WAV, or OGG (max 50 MB). Preview here, adjust the music level above, then render a new version. Original audio stays unless you lower its volume.'),
+    musicToggle, musicRightsRow, musicUpload, musicStatus, musicPreview);
   form.append(musicPanel);
 
   const regenerate = el('label', 'clip-edit-consent');
@@ -2015,6 +2025,29 @@ function librarySelectClip(entry) {
   renderLibrary();
 }
 
+function libraryAddMusic(entry) {
+  if (entry.job.status !== 'completed' || !entry.clip) return;
+  librarySelectClip(entry);
+  requestAnimationFrame(() => {
+    const editor = document.querySelector('.media-library-review .clip-editor');
+    const panel = editor?.querySelector('.timeline-music-panel');
+    if (!panel) return;
+    editor.open = true;
+    panel.classList.add('music-focus');
+    panel.scrollIntoView({behavior: 'smooth', block: 'center'});
+    panel.querySelector('.timeline-music-input')?.focus({preventScroll: true});
+    setTimeout(() => panel.classList.remove('music-focus'), 3500);
+  });
+}
+
+function libraryMusicButton(entry) {
+  const button = el('button', 'media-library-secondary', '♬ Add music');
+  button.type = 'button';
+  button.setAttribute('aria-label', 'Add background music to ' + libraryName(entry));
+  button.addEventListener('click', () => libraryAddMusic(entry));
+  return button;
+}
+
 function buildLibraryAiAssistant(job, clip) {
   const panel = el('section', 'media-library-ai');
   panel.setAttribute('aria-label', 'AI content assistant');
@@ -2173,6 +2206,7 @@ function renderLibraryGrid(entries, target) {
       actions.append(libraryStatusLabel(entry), libraryDownload(entry, 'Download'));
       details.append(actions);
       if (entry.job.status === 'completed') {
+        details.append(libraryMusicButton(entry));
         const ai = el('button', 'media-library-ai-link', '✦ AI ideas');
         ai.type = 'button';
         ai.addEventListener('click', () => librarySelectClip(entry));
@@ -2218,7 +2252,10 @@ function renderLibraryList(entries, target) {
     review.type = 'button';
     review.addEventListener('click', () => librarySelectClip(entry));
     actions.append(review);
-    if (entry.clip) actions.append(libraryDownload(entry, '↓'));
+    if (entry.clip) {
+      actions.append(libraryDownload(entry, '↓'));
+      if (entry.job.status === 'completed') actions.append(libraryMusicButton(entry));
+    }
     row.append(titleCell, source, libraryStatusLabel(entry), aspect, duration, date, actions);
     group.append(row);
     if (expandedLibraryRow === entry.key) {
@@ -2304,6 +2341,7 @@ function renderLibraryReview(entries, target) {
     title.append(el('h2', '', libraryName(selected)), libraryStatusLabel(selected));
     const actions = el('div', 'media-library-review-actions');
     actions.append(libraryDownload(selected));
+    if (selected.job.status === 'completed') actions.append(libraryMusicButton(selected));
     const publishing = el('a', 'media-library-secondary', 'Review in Publishing');
     publishing.href = '/publishing';
     actions.append(publishing);

@@ -668,6 +668,8 @@ def _process(folder: Path, source_path: Path | None = None, url: str | None = No
                     if storyboard else 0,
                     "script_fallbacks": storyboard.get("script_fallbacks", 0)
                     if storyboard else 0,
+                    "script_review_flags": storyboard.get("script_review_flags", [])
+                    if storyboard else [],
                     "creator_focus": opts.clip_focus,
                     "creator_niche": opts.content_niche,
                     "brand_text": opts.brand_text.strip(),
@@ -880,7 +882,7 @@ def get_settings():
         defaults = Options(**saved) if isinstance(saved, dict) else Options(
             selection_mode="ai", caption_style="karaoke", effect="pop",
             framing="smart", max_clips=5, hook_style="headline",
-            narration_basis="video", narration="context",
+            narration_basis="video", narration="none",
         )
     except ValueError:
         defaults = Options()
@@ -1508,6 +1510,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                 if storyboard else 0,
                 "script_fallbacks": storyboard.get("script_fallbacks", 0)
                 if storyboard else 0,
+                "script_review_flags": storyboard.get("script_review_flags", [])
+                if storyboard else [],
             },
         )
         # Commit metadata only after a playable final MP4 exists.
@@ -1525,7 +1529,7 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                     "split_boxes", "split_ratio", "split_fill", "aspect_ratio",
                     "hook_style", "script", "storyboard", "analysis_basis", "frame_samples",
                     "frame_sample_failures", "script_fallbacks",
-                    "brand_text",
+                    "script_review_flags", "brand_text",
                     "segments", "music_enabled", "music_volume",
                 )
             })
@@ -1558,6 +1562,8 @@ def _edit_clip_worker(folder: Path, number: int, request: dict) -> None:
                                        if storyboard else 0),
                 script_fallbacks=(storyboard.get("script_fallbacks", 0)
                                   if storyboard else 0),
+                script_review_flags=(storyboard.get("script_review_flags", [])
+                                     if storyboard else []),
                 brand_text=edit.brand_text.strip(),
                 source_volume=(edit.source_volume if edit.source_volume is not None
                                else (0.18 if voiceover else 1.0)),
@@ -1753,6 +1759,26 @@ async def upload_timeline_music(
     finally:
         await file.close()
     return {"music_file": name, "bytes": size}
+
+
+@app.get("/api/jobs/{job_id}/music/preview")
+def preview_timeline_music(job_id: str):
+    """Play only the validated soundtrack selected for this completed job."""
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Music preview requires a completed video job")
+    filename = job.get("music_file")
+    if not isinstance(filename, str) or not re.fullmatch(
+        r"track-[0-9a-f]{32}\.(mp3|m4a|wav|ogg)", filename,
+    ):
+        raise HTTPException(404, "No playable music selected for this job")
+    audio = folder / "music" / filename
+    if not audio.is_file():
+        raise HTTPException(404, "The selected music track is missing")
+    types = {".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+             ".wav": "audio/wav", ".ogg": "audio/ogg"}
+    return FileResponse(audio, media_type=types[audio.suffix])
 
 
 @app.get("/api/jobs/{job_id}/clips/{filename}")

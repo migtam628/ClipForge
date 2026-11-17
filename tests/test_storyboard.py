@@ -319,11 +319,11 @@ def test_cpu_script_timeout_uses_only_source_excerpts_with_review_metadata(
     )
     assert output["script_fallbacks"] == 2
     assert output["frame_samples"] == 2
-    assert output["script"] == (
-        "A technician opens a control panel. A technician opens a control panel."
-    )
-    assert all(b["generation"] == "source_excerpt" for b in output["beats"])
-    assert all(b["text"] == "A technician opens a control panel." for b in output["beats"])
+    assert output["script"] == ""  # Never burn chopped fallback excerpts into clips.
+    assert [beat["text"] for beat in output["beats"]] == ["", ""]
+    assert "unverified_context_suppressed" in output["script_review_flags"]
+    assert all(b["generation"] == "suppressed_unverified" for b in output["beats"])
+    assert all(b["text"] == "" for b in output["beats"])
     saved = json.loads((tmp_path / "scene-draft.json").read_text())
     assert saved["fallback_ids"] == [0, 1]
 
@@ -635,3 +635,69 @@ def test_video_frame_cache_invalidates_on_source_change(tmp_path, monkeypatch):
     storyboard.build_storyboard([], 0, 12, "casual", "en", checkpoint,
                                 source=source, basis="video")
     assert sampled == pytest.approx([3.0, 9.0, 3.0, 9.0])
+
+
+def test_context_scripts_keep_individual_lines_and_flag_obvious_draft_problems(
+        tmp_path, monkeypatch):
+    def respond(payload, **_kwargs):
+        windows = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        labels = {
+            0: "The camera shows a red door",
+            1: "The camera shows a red door",
+            2: "A person stands in front of",
+        }
+        return json.dumps({"beats": [
+            {"id": w["id"], "text": labels[w["id"]]} for w in windows
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", respond)
+    speech = [
+        {"start": 0, "end": 5, "text": "The camera shows a red door"},
+        {"start": 5, "end": 10, "text": "The camera shows a red door"},
+        {"start": 10, "end": 15, "text": "A person stands next to a window"},
+    ]
+    output = storyboard.build_storyboard(
+        speech, 0, 15, "casual", "en", tmp_path / "context.json",
+        basis="transcript", purpose="overlay",
+    )
+    assert output["script"] == ""  # All three labels are repetitive or incomplete.
+    assert output["script_review_flags"] == [
+        "context_repeats_spoken_dialogue",
+        "incomplete_ai_script_phrase",
+        "repeated_ai_script_phrases",
+        "unverified_context_suppressed",
+    ]
+    assert all(not beat["text"] for beat in output["beats"])
+
+
+def test_context_keeps_source_grounded_labels_but_suppresses_invented_actions(
+        tmp_path, monkeypatch):
+    def respond(payload, **_kwargs):
+        windows = json.loads(payload["prompt"].split("Evidence: ", 1)[1])
+        return json.dumps({"beats": [
+            {"id": w["id"], "text": (
+                "Camera framing choices discussed" if w["id"] == 0
+                else "A dangerous high speed car chase begins"
+            )} for w in windows
+        ]})
+
+    monkeypatch.setattr(storyboard, "_ollama", respond)
+    result = storyboard.build_storyboard([
+        {"start": 0, "end": 6, "text": "They discuss camera framing choices"},
+        {"start": 6, "end": 12, "text": "They describe lighting equipment"},
+    ], 0, 12, "casual", "en", tmp_path / "grounding.json",
+        basis="transcript", purpose="overlay")
+    assert result["beats"][0]["text"] == "Camera framing choices discussed"
+    assert result["beats"][1]["text"] == ""
+    assert result["script"] == "Camera framing choices discussed"
+    assert "unverified_context_suppressed" in result["script_review_flags"]
+
+
+def test_optional_context_without_source_evidence_does_not_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(storyboard, "_ollama", lambda *_args, **_kwargs:
+                        pytest.fail("No AI call needed for an evidence-free scene"))
+    result = storyboard.build_storyboard([], 0, 12, "casual", "en",
+                                         tmp_path / "empty.json", purpose="overlay")
+    assert result["script"] == ""
+    assert result["beats"] == []
+    assert result["script_review_flags"] == ["no_reliable_scene_evidence"]
