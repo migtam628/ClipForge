@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -72,6 +72,7 @@ MAX_BATCH_SOURCES = 100
 MAX_BATCH_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 MAX_QUEUED_SOURCES = 125
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
+SCENE_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-scene")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
 PUBLISH_STOP = threading.Event()
 LOCK = threading.RLock()
@@ -91,6 +92,7 @@ class JobCancelled(Exception):
 async def lifespan(_application: FastAPI):
     """Recover local jobs, then run the persistent approved-publication scheduler."""
     recover_interrupted_jobs()
+    _recover_interrupted_scene_tasks()
     recover_interrupted_publications()
     PUBLISH_STOP.clear()
     _dispatch_due_publications()
@@ -268,6 +270,7 @@ class SceneRangeRequest(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     duration: float = Field(ge=3, le=120, allow_inf_nan=False)
     vision_scene: int | None = Field(default=None, ge=0, le=11)
+    async_mode: bool = Field(default=False, alias="async")
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -1735,6 +1738,67 @@ def preview_original_source(job_id: str):
     return FileResponse(source, media_type=media_types.get(source.suffix.lower(), "application/octet-stream"))
 
 
+def _scene_task_path(folder: Path, number: int) -> Path:
+    return folder / f"clip-{number:03d}-scene-task.json"
+
+
+def _update_scene_task(path: Path, token: str, **changes) -> None:
+    """Persist phase progress while preventing older workers replacing newer results."""
+    with LOCK:
+        state = load_json(path)
+        if isinstance(state, dict) and state.get("token") == token:
+            state.update(changes)
+            save_json(path, state)
+
+
+def _recover_interrupted_scene_tasks() -> None:
+    """A process restart must not leave progress permanently stuck at 'running'."""
+    for folder in DATA_DIR.iterdir():
+        if not folder.is_dir():
+            continue
+        for path in folder.glob("clip-*-scene-task.json"):
+            state = load_json(path)
+            if isinstance(state, dict) and state.get("state") in {"queued", "running"}:
+                state.update(state="failed", stage="Interrupted by server restart",
+                             error="Scene scan stopped during a restart. Retry to continue.")
+                save_json(path, state)
+
+
+def _scene_task_worker(folder: Path, number: int, token: str,
+                       source: Path, transcript: list[dict], start: float,
+                       duration: float) -> None:
+    path = _scene_task_path(folder, number)
+
+    def progress(percent: int, stage: str) -> None:
+        _update_scene_task(path, token, state="running", progress=percent, stage=stage)
+
+    try:
+        progress(10, "Checking source and analysis cache")
+        result = inspect_scene_range(
+            source, transcript, start, duration,
+            folder / f"clip-{number:03d}-scene-cuts.json", progress=progress,
+        )
+        _update_scene_task(path, token, state="completed", progress=100,
+                           stage="Ready for review", result=result, error=None)
+    except Exception as exc:
+        LOGGER.exception("ClipForge scene scan failed for %s clip %s", folder.name, number)
+        _update_scene_task(path, token, state="failed", stage="Analysis failed",
+                           error=str(exc) if isinstance(exc, (OSError, RuntimeError, ValueError))
+                           else "Unexpected scene analysis failure")
+
+
+@app.get("/api/jobs/{job_id}/clips/{number}/scene-cuts/status")
+def scene_cut_scan_status(job_id: str, number: int):
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if not any(c.get("number") == number for c in job.get("clips", [])):
+        raise HTTPException(404, "Clip not found")
+    state = load_json(_scene_task_path(folder, number))
+    if not isinstance(state, dict):
+        raise HTTPException(404, "No scene scan has been started for this clip")
+    return {key: value for key, value in state.items() if key != "token"}
+
+
 @app.post("/api/jobs/{job_id}/clips/{number}/scene-cuts")
 def find_clip_scene_cuts(job_id: str, number: int, body: SceneRangeRequest):
     """Suggest bounded scene splits and verbatim speech evidence, never edit media."""
@@ -1753,9 +1817,38 @@ def find_clip_scene_cuts(job_id: str, number: int, body: SceneRangeRequest):
     if source is None or not source.is_file():
         raise HTTPException(404, "Original source video is unavailable")
     transcript = load_json(folder / "transcript.json")
+    transcript = transcript if isinstance(transcript, list) else []
+    if body.async_mode:
+        if body.vision_scene is not None:
+            raise HTTPException(422, "Use the individual scene inspection action for visual AI")
+        task_path = _scene_task_path(folder, number)
+        request_range = [round(body.start, 3), round(body.duration, 3)]
+        status_url = f"/api/jobs/{job_id}/clips/{number}/scene-cuts/status"
+        with LOCK:
+            existing = load_json(task_path)
+            if isinstance(existing, dict) and existing.get("state") in {"queued", "running"}:
+                if existing.get("range") != request_range:
+                    raise HTTPException(409, "A scene scan is already running for this clip")
+                return JSONResponse(status_code=202, content={
+                    "state": existing["state"], "progress": existing["progress"],
+                    "stage": existing["stage"], "status_url": status_url,
+                })
+            token = uuid.uuid4().hex
+            save_json(task_path, {"token": token, "range": request_range,
+                                  "state": "queued", "progress": 0, "stage": "Queued",
+                                  "error": None})
+            future = _submit_job_task(
+                folder, SCENE_POOL, _scene_task_worker, folder, number, token,
+                source, transcript, body.start, body.duration,
+            )
+            if future is None:
+                raise HTTPException(409, "Job is no longer available for analysis")
+        return JSONResponse(status_code=202, content={
+            "state": "queued", "progress": 0, "stage": "Queued", "status_url": status_url,
+        })
     try:
         return inspect_scene_range(
-            source, transcript if isinstance(transcript, list) else [],
+            source, transcript,
             body.start, body.duration, folder / f"clip-{number:03d}-scene-cuts.json",
             vision_scene=body.vision_scene,
         )
