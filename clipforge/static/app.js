@@ -897,6 +897,7 @@ function buildClipEditor(job, clip) {
   const cutNotice = el('p', 'helper-note',
     'Drag numbered blocks to reorder, or use the arrow buttons.');
   const cutLabel = el('strong', '', 'V2 · Cut & reorder');
+  const sceneEvidence = el('div', 'timeline-scene-evidence');
   function cutButton(text, action) {
     const button = el('button', 'small-action', text);
     button.type = 'button';
@@ -973,6 +974,53 @@ function buildClipEditor(job, clip) {
     }
   };
   cutControls.append(
+    cutButton('✦ Detect scene changes', async () => {
+      const begin = Number(start.value), length = Number(duration.value);
+      if (!Number.isFinite(begin) || !Number.isFinite(length) || length < 3 ||
+          length > 120 || begin < 0 || begin + length > totalSeconds + 0.05)
+        return notify('Select a source range between 3 and 120 seconds first.');
+      if (cutsActive && cuts.length > 1 &&
+          !window.confirm('Replace your current unsaved cut sequence with detected scenes?'))
+        return;
+      cutNotice.textContent = 'Inspecting visual scene changes… This can take a minute on a CPU server.';
+      try {
+        const response = await fetch(`/api/jobs/${job.id}/clips/${clip.number}/scene-cuts`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({start: begin, duration: length})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(typeof result.detail === 'string'
+          ? result.detail : 'Scene detection failed');
+        if (!result.cuts?.length) {
+          drawCuts();
+          sceneEvidence.replaceChildren();
+          return notify('No confident scene changes found. Keep your original cut.');
+        }
+        const boundaries = [begin, ...result.cuts, begin + length];
+        cuts = boundaries.slice(0, -1).map((value, index) => ({
+          start: Number(value.toFixed(2)),
+          duration: Number((boundaries[index + 1] - value).toFixed(2))
+        }));
+        cutsActive = true;
+        selectedCut = 0;
+        drawCuts();
+        sceneEvidence.replaceChildren(el('strong', '',
+          `${cuts.length} visual scenes detected · review and reorder before exporting`));
+        for (const [index, scene] of (result.scenes || []).entries()) {
+          const row = el('button', 'timeline-scene-evidence-row');
+          row.type = 'button';
+          row.append(el('strong', '', `Scene ${index + 1} · ${time(scene.start)}`),
+            el('span', '', scene.speech_excerpt || 'No spoken words detected here'));
+          row.title = 'Jump to this source scene (speech is a verbatim transcript excerpt)';
+          row.addEventListener('click', () => { sourceVideo.currentTime = scene.start; });
+          sceneEvidence.append(row);
+        }
+        notify(`Detected ${result.cuts.length} scene changes. Review before rendering.`);
+      } catch (error) {
+        drawCuts();
+        notify(error.message);
+      }
+    }),
     cutButton('✂ Split at playhead', () => {
       const at = Number(sourceVideo.currentTime);
       const index = cutsActive && cuts[selectedCut] &&
@@ -1031,7 +1079,7 @@ function buildClipEditor(job, clip) {
     }
   });
   ruler.addEventListener('input', () => { previewingCuts = false; });
-  cutPanel.append(cutLabel, cutControls, sequenceRail, cutList, cutNotice);
+  cutPanel.append(cutLabel, cutControls, sequenceRail, cutList, cutNotice, sceneEvidence);
   drawCuts();
   timeline.append(monitor, tracks);
   form.append(timeline, cutPanel);
@@ -1225,8 +1273,26 @@ function buildClipEditor(job, clip) {
     }
   });
   musicPanel.append(el('strong', 'timeline-music-heading', '♬ Add background music'),
-    el('span', 'helper-note', 'Choose a licensed MP3, M4A, WAV, or OGG (max 50 MB). Preview here, adjust the music level above, then render a new version. Original audio stays unless you lower its volume.'),
+    el('span', 'helper-note', 'Choose a licensed MP3, M4A, WAV, or OGG (max 50 MB). Preview it, balance both tracks, and render a new version. Dialogue ducking lowers music automatically when speech is present.'),
     musicToggle, musicRightsRow, musicUpload, musicStatus, musicPreview);
+  function fadeControl(name, value) {
+    const row = el('label', 'timeline-music-fade');
+    const input = el('input');
+    input.type = 'number'; input.min = '0'; input.max = '5'; input.step = '0.25';
+    input.value = String(value);
+    row.append(el('span', '', name), input);
+    musicPanel.append(row);
+    return input;
+  }
+  const musicFadeIn = fadeControl('Fade in (seconds)', clip.music_fade_in ?? 0.5);
+  const musicFadeOut = fadeControl('Fade out (seconds)', clip.music_fade_out ?? 0.75);
+  const duckingToggle = el('label', 'clip-edit-consent');
+  const musicDucking = el('input');
+  musicDucking.type = 'checkbox';
+  musicDucking.checked = clip.music_ducking !== false;
+  duckingToggle.append(musicDucking,
+    el('span', '', 'Auto-duck music under original speech and narrator voice'));
+  musicPanel.append(duckingToggle);
   form.append(musicPanel);
 
   const regenerate = el('label', 'clip-edit-consent');
@@ -1309,6 +1375,11 @@ function buildClipEditor(job, clip) {
       return notify('Revised timing needs regenerated contextual text.');
     if (musicEnabled.checked && !musicReady)
       return notify('Upload a music track before enabling background music.');
+    const fadeIn = Number(musicFadeIn.value), fadeOut = Number(musicFadeOut.value);
+    if (musicEnabled.checked && (!Number.isFinite(fadeIn) || !Number.isFinite(fadeOut) ||
+        fadeIn < 0 || fadeOut < 0 || fadeIn > 5 || fadeOut > 5 ||
+        fadeIn + fadeOut > (cutsActive ? cutDuration : span)))
+      return notify('Choose fades of 0–5 seconds whose combined length fits the clip.');
     if (framing.value === 'split' && outputRatio.value !== '9:16')
       return notify('Choose 9:16 to render the two-person split, or change the framing mode.');
     if (voice.checked && (!approval.checked ||
@@ -1338,6 +1409,9 @@ function buildClipEditor(job, clip) {
       voice_volume: Number(voiceVolume.value) / 100,
       music_enabled: musicEnabled.checked,
       music_volume: Number(musicVolume.value) / 100,
+      music_fade_in: fadeIn,
+      music_fade_out: fadeOut,
+      music_ducking: musicDucking.checked,
       brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
       context_overlay: context.checked,

@@ -445,6 +445,38 @@ def test_render_clip_audio_mixer_uses_validated_levels(tmp_path, monkeypatch):
         engine.render_clip(source, dest, 0, 3, "9:16", source_volume=float("nan"))
 
 
+def test_music_ducking_and_fades_generate_a_valid_audio_export(tmp_path):
+    source = tmp_path / "original.mp4"
+    soundtrack = tmp_path / "licensed.wav"
+    exported = tmp_path / "mixed.mp4"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
+        "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=10:d=3",
+        "-f", "lavfi", "-i", "sine=frequency=500:duration=3",
+        "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "aac",
+        str(source),
+    ], capture_output=True, check=True, timeout=30)
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
+        "-f", "lavfi", "-i", "sine=frequency=300:duration=3",
+        str(soundtrack),
+    ], capture_output=True, check=True, timeout=30)
+    render_clip(source, exported, 0, 3, "16:9", framing="pad", music=soundtrack,
+                music_volume=0.20, music_fade_in=0.5, music_fade_out=0.5,
+                music_ducking=True)
+    assert engine.probe(exported)["has_audio"] is True
+    assert exported.stat().st_size > 500
+    with pytest.raises(ValueError, match="Music fades"):
+        render_clip(source, tmp_path / "bad.mp4", 0, 3, "16:9",
+                    music=soundtrack, music_fade_in=2, music_fade_out=2)
+
+
+def test_music_fade_validation_in_edit_request():
+    with pytest.raises(ValueError, match="Music fades"):
+        module.ClipEditRequest(start=0, duration=3, music_enabled=True,
+                               music_fade_in=2, music_fade_out=2)
+
+
 def test_editor_is_in_library_and_studio_contains_hook_controls():
     page = client.get("/library").text
     assert 'id="view-library"' in page
