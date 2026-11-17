@@ -991,31 +991,73 @@ function buildClipEditor(job, clip) {
         const result = await response.json();
         if (!response.ok) throw new Error(typeof result.detail === 'string'
           ? result.detail : 'Scene detection failed');
-        if (!result.cuts?.length) {
+        const detectedCuts = result.cuts || [];
+        if (!detectedCuts.length && !(result.auto_edit?.segments?.length > 1)) {
           drawCuts();
           sceneEvidence.replaceChildren();
           return notify('No confident scene changes found. Keep your original cut.');
         }
-        const boundaries = [begin, ...result.cuts, begin + length];
-        cuts = boundaries.slice(0, -1).map((value, index) => ({
-          start: Number(value.toFixed(2)),
-          duration: Number((boundaries[index + 1] - value).toFixed(2))
-        }));
-        cutsActive = true;
-        selectedCut = 0;
+        if (detectedCuts.length) {
+          const boundaries = [begin, ...detectedCuts, begin + length];
+          cuts = boundaries.slice(0, -1).map((value, index) => ({
+            start: Number(value.toFixed(2)),
+            duration: Number((boundaries[index + 1] - value).toFixed(2))
+          }));
+          cutsActive = true;
+          selectedCut = 0;
+        }
         drawCuts();
         sceneEvidence.replaceChildren(el('strong', '',
-          `${cuts.length} visual scenes detected · review and reorder before exporting`));
+          `${result.scenes?.length || 1} visual scene(s) inspected · review before exporting`));
+        const pacing = result.auto_edit;
+        if (pacing?.segments?.length > 1) {
+          const paceButton = cutButton(
+            `✂ Suggest tighter pacing · remove ${pacing.removed_seconds.toFixed(1)}s of long pauses`,
+            () => {
+              if (!window.confirm('Remove these transcript-silent gaps from the proposed cut order? ' +
+                  'Silence may contain important action. Preview the whole sequence before rendering.')) return;
+              cuts = pacing.segments.map(part => ({start: part.start, duration: part.duration}));
+              cutsActive = true;
+              selectedCut = 0;
+              drawCuts();
+              notify('Suggested cuts loaded. Preview every cut before rendering.');
+            });
+          sceneEvidence.append(paceButton, el('p', 'helper-note',
+            'Pacing suggestions remove only long gaps between transcribed speech; they cannot detect silent visual highlights.'));
+        }
         for (const [index, scene] of (result.scenes || []).entries()) {
-          const row = el('button', 'timeline-scene-evidence-row');
-          row.type = 'button';
-          row.append(el('strong', '', `Scene ${index + 1} · ${time(scene.start)}`),
-            el('span', '', scene.speech_excerpt || 'No spoken words detected here'));
-          row.title = 'Jump to this source scene (speech is a verbatim transcript excerpt)';
-          row.addEventListener('click', () => { sourceVideo.currentTime = scene.start; });
+          const row = el('div', 'timeline-scene-evidence-row');
+          const jump = cutButton(`Scene ${index + 1} · ${time(scene.start)}`, () => {
+            sourceVideo.currentTime = scene.start;
+          });
+          jump.title = 'Jump to this scene in the original source';
+          const evidence = el('span', '', scene.speech_excerpt || 'No spoken words detected here');
+          const visionNote = el('span', 'helper-note', '');
+          const visionButton = cutButton('✦ Inspect one video frame with local AI', async () => {
+            visionButton.disabled = true;
+            visionNote.textContent = 'Checking one source frame locally… CPU inference may take a while.';
+            try {
+              const observed = await fetch(`/api/jobs/${job.id}/clips/${clip.number}/scene-cuts`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({start: begin, duration: length, vision_scene: index})
+              });
+              const payload = await observed.json();
+              if (!observed.ok) throw new Error(typeof payload.detail === 'string'
+                ? payload.detail : 'Local visual inspection unavailable');
+              const draft = payload.visual_draft;
+              visionNote.textContent = draft?.observation
+                ? `AI draft from one frame at ${time(draft.timestamp)}: ${draft.observation} · Unverified; check the actual footage.`
+                : 'No visual description available for this frame.';
+            } catch (error) {
+              visionNote.textContent = error.message;
+            } finally {
+              visionButton.disabled = false;
+            }
+          });
+          row.append(jump, evidence, visionButton, visionNote);
           sceneEvidence.append(row);
         }
-        notify(`Detected ${result.cuts.length} scene changes. Review before rendering.`);
+        notify(`Found ${detectedCuts.length} visual scene changes. Review suggestions before rendering.`);
       } catch (error) {
         drawCuts();
         notify(error.message);
@@ -1261,6 +1303,10 @@ function buildClipEditor(job, clip) {
         ? result.detail : 'Could not upload music');
       musicReady = true;
       musicEnabled.checked = true;
+      if (Number.isFinite(Number(result.duration))) {
+        musicStart.max = String(Math.min(300, Math.floor(Number(result.duration) * 4) / 4));
+        musicStart.value = '0';
+      }
       musicStatus.textContent = 'Music ready · ' + file.name;
       musicPreview.src = `/api/jobs/${job.id}/music/preview?v=${Date.now()}`;
       musicPreview.hidden = false;
@@ -1286,6 +1332,48 @@ function buildClipEditor(job, clip) {
   }
   const musicFadeIn = fadeControl('Fade in (seconds)', clip.music_fade_in ?? 0.5);
   const musicFadeOut = fadeControl('Fade out (seconds)', clip.music_fade_out ?? 0.75);
+  const musicStartRow = el('label', 'timeline-music-fade');
+  const musicStart = el('input');
+  musicStart.type = 'number'; musicStart.min = '0'; musicStart.step = '0.25';
+  musicStart.max = String(Math.min(300, Number(job.music_duration) || 300));
+  musicStart.value = String(clip.music_start ?? 0);
+  musicStartRow.append(el('span', '', 'Start song at (seconds)'), musicStart);
+  musicPanel.append(musicStartRow);
+  musicPanel.append(cutButton('Use music preview position', () => {
+    if (!musicReady) return notify('Upload a music track first.');
+    musicStart.value = String(Math.min(300, Math.floor(musicPreview.currentTime * 4) / 4));
+    notify(`Music will start at ${musicStart.value}s of the selected track.`);
+  }));
+  const rhythmMarkers = el('div', 'timeline-rhythm-markers');
+  const inspectRhythm = cutButton('Find rhythmic accents (approximate)', async () => {
+    if (!musicReady) return notify('Upload a music track first.');
+    inspectRhythm.disabled = true;
+    rhythmMarkers.replaceChildren(el('span', 'helper-note', 'Analyzing audio energy locally…'));
+    try {
+      const response = await fetch(`/api/jobs/${job.id}/music/rhythm`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(typeof data.detail === 'string'
+        ? data.detail : 'Could not inspect this music track');
+      rhythmMarkers.replaceChildren(el('span', 'helper-note',
+        'Possible rhythmic accents (not guaranteed beats). Select one to start the song there:'));
+      if (!data.markers?.length) {
+        rhythmMarkers.append(el('span', 'helper-note', 'No clear accent detected. Use the player instead.'));
+      }
+      for (const marker of (data.markers || [])) {
+        const button = cutButton(time(marker), () => {
+          musicPreview.currentTime = marker;
+          musicStart.value = String(marker);
+          notify(`Music start set to approximately ${marker}s.`);
+        });
+        rhythmMarkers.append(button);
+      }
+    } catch (error) {
+      rhythmMarkers.replaceChildren(el('span', 'helper-note', error.message));
+    } finally {
+      inspectRhythm.disabled = false;
+    }
+  });
+  musicPanel.append(inspectRhythm, rhythmMarkers);
   const duckingToggle = el('label', 'clip-edit-consent');
   const musicDucking = el('input');
   musicDucking.type = 'checkbox';
@@ -1376,10 +1464,15 @@ function buildClipEditor(job, clip) {
     if (musicEnabled.checked && !musicReady)
       return notify('Upload a music track before enabling background music.');
     const fadeIn = Number(musicFadeIn.value), fadeOut = Number(musicFadeOut.value);
+    const musicOffset = Number(musicStart.value);
     if (musicEnabled.checked && (!Number.isFinite(fadeIn) || !Number.isFinite(fadeOut) ||
         fadeIn < 0 || fadeOut < 0 || fadeIn > 5 || fadeOut > 5 ||
         fadeIn + fadeOut > (cutsActive ? cutDuration : span)))
       return notify('Choose fades of 0–5 seconds whose combined length fits the clip.');
+    if (musicEnabled.checked && (!Number.isFinite(musicOffset) || musicOffset < 0 ||
+        musicOffset > 300 || (Number(job.music_duration) > 0 &&
+          musicOffset >= Number(job.music_duration))))
+      return notify('Choose a music start point within the uploaded song.');
     if (framing.value === 'split' && outputRatio.value !== '9:16')
       return notify('Choose 9:16 to render the two-person split, or change the framing mode.');
     if (voice.checked && (!approval.checked ||
@@ -1412,6 +1505,7 @@ function buildClipEditor(job, clip) {
       music_fade_in: fadeIn,
       music_fade_out: fadeOut,
       music_ducking: musicDucking.checked,
+      music_start: musicOffset,
       brand_text: brandText.value.trim(),
       regenerate_storyboard: regenerateCheck.checked,
       context_overlay: context.checked,

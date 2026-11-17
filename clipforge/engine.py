@@ -225,6 +225,7 @@ def render_clip(
     music: Path | None = None, music_volume: float = 0.25,
     music_fade_in: float = 0.5, music_fade_out: float = 0.75,
     music_ducking: bool = True,
+    music_start: float = 0,
 ) -> None:
     if source_volume is None:
         source_volume = 0.18 if voiceover is not None else 1.0
@@ -236,6 +237,8 @@ def render_clip(
         raise ValueError("Music fades must be between 0 and 5 seconds")
     if music is not None and music_fade_in + music_fade_out > length:
         raise ValueError("Music fades cannot be longer than the clip")
+    if not math.isfinite(music_start) or not 0 <= music_start <= 300:
+        raise ValueError("Music start must be between 0 and 300 seconds")
     size = OUTPUT_SIZES[ratio]
     w, h = size
     if framing == "split":
@@ -332,7 +335,7 @@ def render_clip(
     if voiceover is not None:
         args.extend(["-i", str(voiceover)])
     if music is not None:
-        args.extend(["-stream_loop", "-1", "-i", str(music)])
+        args.extend(["-stream_loop", "-1", "-ss", f"{music_start:.3f}", "-i", str(music)])
     args += ["-t", str(length), "-map", "0:v:0"]
     if voiceover is not None or music is not None:
         # Mix only existing tracks. Music loops under the source and narrator,
