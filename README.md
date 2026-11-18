@@ -361,9 +361,12 @@ percentages represent processing stages, not a measured frame-level ETA.
 
 ### Content-aware editorial direction (review only)
 
-The Library timeline editor now includes **Analyze clip content**. It reviews
-source-aligned speech and optionally requests **three locally generated frame
-descriptions** from the configured Ollama vision model. Analysis runs in its
+The Library timeline editor includes **Analyze clip content** with two depths:
+**Quick review** checks source-aligned speech and optionally requests three
+locally generated frame descriptions; **Scene sequence** additionally scans
+visual shot boundaries and compares two snapshots in each of two or three
+consecutive time windows (up to six frames). Both use the configured local
+Ollama vision model. Analysis runs in its
 own background queue with stage progress and a restart-recoverable status; the
 original MP4 is not changed. Each result includes timestamped speech evidence,
 individually labeled *unverified* frame drafts, and a conservative suggestion:
@@ -390,6 +393,20 @@ and `status_url`. Poll that URL until `state` becomes `completed` or `failed`.
 If the local vision model is not installed or reachable, the report explicitly
 falls back to source speech; it does not pretend to have watched the video.
 Frame descriptions are cached as text, never as persistent extracted images.
+
+**Scene sequence** returns timestamped *before* and *after* observations,
+conservative similarity/difference labels, approximate visual cut points, and
+optional pacing suggestions based on long gaps in transcribed speech. The
+detected differences **do not establish motion, identity tracking, intent,
+cause, or a verified action**; sampling can miss important moments. A partial
+scene scan disables pacing cut proposals. The UI can load an approved pacing
+sequence into the *unsaved* editor with confirmation, but never silently cuts
+the footage. Review speech-silent action before accepting any trimming.
+
+To request this optional level via API, add `"depth": "sequence"` to the
+content-review POST body. The default is `"quick"` for compatibility. On
+CPU-only servers, vision inference across six frames can be slow; a queued
+analysis retains its progress and text evidence across normal polling.
 
 ## Creator-directed clip discovery and publishing drafts (v0.10)
 

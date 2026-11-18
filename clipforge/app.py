@@ -36,7 +36,7 @@ from clipforge.captions import (
     write_storyboard_captions,
 )
 from clipforge.config_agent import request_agent
-from clipforge.content_director import analyze_content_range
+from clipforge.content_director import analyze_content_range, analyze_temporal_range
 from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.engine import (
     audio_energy,
@@ -282,6 +282,7 @@ class ContentReviewRequest(BaseModel):
     start: float = Field(ge=0, allow_inf_nan=False)
     duration: float = Field(ge=3, le=120, allow_inf_nan=False)
     use_vision: bool = True
+    depth: Literal["quick", "sequence"] = "quick"
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -1887,7 +1888,8 @@ def _recover_interrupted_content_tasks() -> None:
 
 def _content_task_worker(folder: Path, number: int, token: str,
                          source: Path, transcript: list[dict], start: float,
-                         duration: float, use_vision: bool, vision_note: str) -> None:
+                         duration: float, use_vision: bool, vision_note: str,
+                         depth: str = "quick") -> None:
     task_path = _content_task_path(folder, number)
 
     def progress(percent: int, stage: str) -> None:
@@ -1896,7 +1898,8 @@ def _content_task_worker(folder: Path, number: int, token: str,
 
     try:
         progress(10, "Reviewing source speech and visual evidence")
-        result = analyze_content_range(
+        analysis = analyze_temporal_range if depth == "sequence" else analyze_content_range
+        result = analysis(
             source, transcript, start, duration,
             folder / f"clip-{number:03d}-content.json",
             use_vision=use_vision, progress=progress,
@@ -1946,7 +1949,8 @@ def request_content_review(job_id: str, number: int, body: ContentReviewRequest)
     transcript = load_json(folder / "transcript.json")
     transcript = transcript if isinstance(transcript, list) else []
     task_path = _content_task_path(folder, number)
-    requested = [round(body.start, 3), round(body.duration, 3), body.use_vision]
+    requested = [round(body.start, 3), round(body.duration, 3),
+                 body.use_vision, body.depth]
     status_url = f"/api/jobs/{job_id}/clips/{number}/content-review/status"
     with LOCK:
         existing = load_json(task_path)
@@ -1968,7 +1972,8 @@ def request_content_review(job_id: str, number: int, body: ContentReviewRequest)
                               "error": None})
         future = _submit_job_task(
             folder, CONTENT_POOL, _content_task_worker, folder, number, token,
-            source, transcript, body.start, body.duration, use_vision, vision_note,
+            source, transcript, body.start, body.duration, use_vision,
+            vision_note, body.depth,
         )
         if future is None:
             raise HTTPException(409, "Job is no longer available for analysis")

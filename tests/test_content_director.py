@@ -143,7 +143,7 @@ def test_conflicting_inflight_review_is_rejected_and_restart_recovers(tmp_path, 
     module._patch(folder, status="completed", source_file="source.mp4",
                   duration=60, clips=[{"number": 1, "start": 5, "duration": 15}])
     path = module._content_task_path(folder, 1)
-    save_json(path, {"token": "secret", "request": [5, 15, True],
+    save_json(path, {"token": "secret", "request": [5, 15, True, "quick"],
                      "state": "running", "progress": 60, "stage": "Analyzing"})
     url = f"/api/jobs/{job_id}/clips/1/content-review"
     assert client.post(url, json={"start": 10, "duration": 15}).status_code == 409
@@ -154,3 +154,129 @@ def test_conflicting_inflight_review_is_rejected_and_restart_recovers(tmp_path, 
     status = client.get(url + "/status").json()
     assert status["state"] == "failed"
     assert "restart" in status["error"]
+
+
+def test_frame_pair_differences_are_not_claimed_as_verified_motion():
+    assert content_director._compare_descriptions("A green tree beside a road",
+                                                   "A green tree beside the road") == "similar_descriptions"
+    assert content_director._compare_descriptions("A green tree beside the road",
+                                                   "A red car near the lake") == "different_descriptions"
+    assert content_director._compare_descriptions("", "A red car") == "insufficient_visual_evidence"
+
+
+def test_temporal_review_uses_three_source_windows_and_six_local_frames(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    events = []
+
+    def inspect(_source, _transcript, _start, _duration, _checkpoint, *, progress):
+        progress(90, "Preparing source evidence")
+        return {"cuts": [4.0, 10.0], "method": "keyframe_difference",
+                "analysis_status": "coarse", "warning": "Approximate cuts",
+                "auto_edit": {"segments": [], "removed_seconds": 0,
+                              "reason": "no_long_internal_pauses", "review_required": True}}
+
+    def vision(_source, scene, checkpoint):
+        stamp = round(scene["start"] + scene["duration"] / 2, 2)
+        events.append((stamp, checkpoint.name))
+        return {"observation": f"A person at timestamp {stamp} near the table"}
+
+    monkeypatch.setattr(content_director, "inspect_scene_range", inspect)
+    monkeypatch.setattr(content_director, "_visual_draft", vision)
+    updates = []
+    result = content_director.analyze_temporal_range(
+        source, [{"start": 0, "end": 12, "text": "The presenter describes a new camera "
+                 "setup and explains why the picture is sharper now"}], 0, 15,
+        tmp_path / "clip-001-content.json", use_vision=True,
+        progress=lambda percent, stage: updates.append((percent, stage)),
+    )
+    assert result["analysis_depth"] == "sequence"
+    assert result["sampled_frames"] == result["max_frames"] == 6
+    assert result["suggested_mode"] == "captions_only"
+    assert len(result["temporal"]["windows"]) == 3
+    assert result["temporal"]["cuts"] == [4, 10]
+    assert result["temporal"]["cut_analysis_status"] == "coarse"
+    assert [timestamp for timestamp, _ in events] == [2.5, 4.25, 7.5, 9.25, 12.5, 14.25]
+    assert events[0][1] == "clip-001-content-frame-0.json"  # reuse quick-frame cache
+    assert updates[-1][0] == 90
+    assert all(window["review_required"] for window in result["temporal"]["windows"])
+    assert "not verified actions" in result["temporal"]["interpretation"]
+
+
+def test_temporal_review_degrades_without_vision_and_disables_partial_pacing(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(content_director, "inspect_scene_range", lambda *_, **__: {
+        "cuts": [], "method": "bounded_frame_difference", "analysis_status": "partial",
+        "warning": "Scan timed out", "auto_edit": {"segments": [
+            {"start": 0, "duration": 2}, {"start": 5, "duration": 5}],
+            "removed_seconds": 3, "reason": "speech_gap", "review_required": True},
+    })
+    monkeypatch.setattr(content_director, "_visual_draft", lambda *_, **__: (
+        1 / 0))  # must not run when visual analysis is disabled
+    plan = content_director.analyze_temporal_range(
+        source, [], 0, 10, tmp_path / "clip-content.json", use_vision=False,
+    )
+    assert plan["visual_status"] == "not_requested"
+    assert plan["sampled_frames"] == 0
+    assert plan["max_frames"] == 4  # short selections use only two windows
+    assert plan["temporal"]["cut_analysis_status"] == "partial"
+    assert plan["temporal"]["pacing"]["segments"] == []
+    assert plan["suggested_mode"] == "no_extra_text"
+
+
+def test_temporal_review_keeps_speech_evidence_when_cut_decoder_fails(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+
+    def decoder_fails(*_, **__):
+        raise RuntimeError("Video could not be decoded")
+
+    monkeypatch.setattr(content_director, "inspect_scene_range", decoder_fails)
+    plan = content_director.analyze_temporal_range(
+        source, [{"start": 0, "end": 4, "text": "The speaker is explaining an issue "
+                 "that needs urgent repair in this particular area"}],
+        0, 10, tmp_path / "content.json", use_vision=False,
+    )
+    assert plan["suggested_mode"] == "captions_only"
+    assert plan["temporal"]["cut_analysis_status"] == "partial"
+    assert plan["temporal"]["cuts"] == []
+    assert plan["temporal"]["pacing"]["segments"] == []
+
+
+def test_content_review_api_dispatches_sequence_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = module._create("upload", module.Options(), "temporal review")
+    (folder / "source.mp4").write_bytes(b"source")
+    module._patch(folder, status="completed", source_file="source.mp4",
+                  duration=60, clips=[{"number": 1, "start": 0, "duration": 15}])
+    monkeypatch.setattr(module, "vision_status", lambda: {
+        "status": "unavailable", "note": "Ollama unreachable",
+    })
+    calls = []
+
+    def temporal(_source, _transcript, _start, _duration, _checkpoint, *,
+                 use_vision, progress):
+        calls.append(use_vision)
+        progress(60, "Comparing frame pairs")
+        return {"suggested_mode": "no_extra_text", "evidence": [],
+                "visual_status": "not_requested", "temporal": {
+                    "windows": [], "cuts": [], "pacing": {"segments": []}}}
+
+    monkeypatch.setattr(module, "analyze_temporal_range", temporal)
+    endpoint = f"/api/jobs/{job_id}/clips/1/content-review"
+    assert client.post(endpoint, json={"start": 0, "duration": 15,
+                                       "depth": "unknown"}).status_code == 422
+    queued = client.post(endpoint, json={"start": 0, "duration": 15,
+                                         "depth": "sequence"})
+    assert queued.status_code == 202
+    state = {}
+    for _ in range(100):
+        state = client.get(queued.json()["status_url"]).json()
+        if state.get("state") == "completed":
+            break
+        time.sleep(0.01)
+    assert state["state"] == "completed"
+    assert state["result"]["temporal"]["windows"] == []
+    assert state["result"]["vision_note"] == "Ollama unreachable"
+    assert calls == [False]

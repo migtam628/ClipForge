@@ -10,7 +10,7 @@ import math
 import re
 from pathlib import Path
 
-from clipforge.scene_analysis import _visual_draft
+from clipforge.scene_analysis import _visual_draft, inspect_scene_range
 from clipforge.storyboard import _meaningful_tokens, _transcript_evidence
 
 MAX_SAMPLES = 3
@@ -128,3 +128,131 @@ def analyze_content_range(source: Path, transcript: list[dict], start: float,
               "unavailable" if use_vision else "not_requested")
     return recommend_content_mode(transcript, start, duration, entries,
                                   visual_status=status)
+
+
+def _compare_descriptions(before: str, after: str) -> str:
+    """Only compare words in two unverified snapshots; do not infer motion."""
+    if not before or not after:
+        return "insufficient_visual_evidence"
+    earlier = _meaningful_tokens(before)
+    later = _meaningful_tokens(after)
+    if not earlier or not later:
+        return "insufficient_visual_evidence"
+    overlap = len(earlier & later) / len(earlier | later)
+    if overlap >= 0.65:
+        return "similar_descriptions"
+    if overlap <= 0.25:
+        return "different_descriptions"
+    return "uncertain_difference"
+
+
+def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
+                           duration: float, checkpoint: Path, *,
+                           use_vision: bool, progress=None) -> dict:
+    """Sample *pairs* of frames across a clip and align coarse shot evidence.
+
+    This analyzes before/after snapshots within consecutive source windows.
+    Differences can suggest edits, but neither changing pixels nor changing
+    descriptions prove that a particular object moved or action occurred.
+    """
+    if not source.is_file() or not math.isfinite(start) or not math.isfinite(duration):
+        raise ValueError("A readable original source and finite range are required")
+    if start < 0 or not 3 <= duration <= 120:
+        raise ValueError("Select 3–120 seconds inside the original source")
+
+    def scan_progress(percent: int, stage: str) -> None:
+        if progress:
+            progress(10 + round(percent * 0.25), stage)
+
+    try:
+        scan = inspect_scene_range(
+            source, transcript, start, duration,
+            checkpoint.with_name(checkpoint.stem + "-scene-cuts.json"),
+            progress=scan_progress,
+        )
+    except (RuntimeError, TimeoutError, OSError):
+        # A video whose shot scan cannot decode still has useful speech and
+        # possibly individually readable frames. Abstain on all cut proposals.
+        scan = {
+            "cuts": [], "method": "unavailable", "analysis_status": "partial",
+            "warning": "Visual shot scanning was unavailable; no cut list was produced.",
+            "auto_edit": {"segments": [], "removed_seconds": 0,
+                          "reason": "scene_scan_unavailable", "review_required": True},
+        }
+    windows = []
+    evidence = []
+    sample_count = 0
+    failures = 0
+    count = 2 if duration < 12 else MAX_SAMPLES
+    for index in range(count):
+        left = start + duration * index / count
+        span = duration / count
+        before_at, after_at = left + span * 0.5, left + span * 0.85
+        before, after = "", ""
+        if use_vision:
+            for phase, scene, cache_path in (
+                ("before", {"start": left, "duration": span},
+                 checkpoint.with_name(checkpoint.stem + f"-frame-{index}.json")),
+                ("after", {"start": left + span * 0.7, "duration": span * 0.3},
+                 checkpoint.with_name(checkpoint.stem + f"-sequence-after-{index}.json")),
+            ):
+                try:
+                    draft = _visual_draft(source, scene, cache_path)
+                except (RuntimeError, OSError, ValueError):
+                    failures += 1
+                else:
+                    if phase == "before":
+                        before = draft["observation"]
+                    else:
+                        after = draft["observation"]
+                    sample_count += 1
+        speech = _transcript_evidence(
+            transcript, start, left - start, left - start + span,
+        )[:240]
+        signal = _compare_descriptions(before, after)
+        windows.append({
+            "start": round(left, 2), "end": round(left + span, 2),
+            "before": {"timestamp": round(before_at, 2), "observation": before},
+            "after": {"timestamp": round(after_at, 2), "observation": after},
+            "speech_excerpt": speech, "change_signal": signal,
+            "review_required": True,
+        })
+        evidence.append({
+            "timestamp": round(before_at, 2), "start": round(left, 2),
+            "end": round(left + span, 2), "speech_excerpt": speech,
+            "visual_observation": " ".join(v for v in (before, after) if v),
+            "visual_basis": "two_unverified_ai_frames" if before and after
+            else "partial_unverified_ai_frames" if before or after else "unavailable",
+        })
+        if progress:
+            progress(35 + round(55 * (index + 1) / count),
+                     f"Comparing source window {index + 1}/{count}")
+    status = ("ready" if use_vision and failures == 0 else
+              "partial" if use_vision and sample_count else
+              "unavailable" if use_vision else "not_requested")
+    result = recommend_content_mode(transcript, start, duration, evidence,
+                                    visual_status=status)
+    # The base planner counts described windows; this report includes individual
+    # snapshots and reports the actual number, even when some inference fails.
+    result["sampled_frames"] = sample_count
+    result["max_frames"] = count * 2
+    result["analysis_basis"] = ("source_speech_and_temporal_frame_pairs" if sample_count
+                                else "source_speech_and_shot_boundaries_only")
+    result["analysis_depth"] = "sequence"
+    pacing = scan["auto_edit"]
+    if scan["analysis_status"] == "partial":
+        pacing = {"segments": [], "removed_seconds": 0,
+                  "reason": "incomplete_scene_scan", "review_required": True}
+    result["temporal"] = {
+        "windows": windows,
+        "cuts": scan["cuts"],
+        "cut_method": scan["method"],
+        "cut_analysis_status": scan["analysis_status"],
+        "cut_warning": scan.get("warning"),
+        "pacing": pacing,
+        "review_required": True,
+        "interpretation": ("Different visual descriptions identify possible changes "
+                           "between sampled moments, not verified actions, object tracking, "
+                           "or continuous coverage. Review source footage and all cut points."),
+    }
+    return result
