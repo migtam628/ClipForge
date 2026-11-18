@@ -359,6 +359,38 @@ restart marks interrupted scene scans as failed so the user can retry. The
 dedicated scene worker does not occupy the primary clip render queue. These
 percentages represent processing stages, not a measured frame-level ETA.
 
+### Content-aware editorial direction (review only)
+
+The Library timeline editor now includes **Analyze clip content**. It reviews
+source-aligned speech and optionally requests **three locally generated frame
+descriptions** from the configured Ollama vision model. Analysis runs in its
+own background queue with stage progress and a restart-recoverable status; the
+original MP4 is not changed. Each result includes timestamped speech evidence,
+individually labeled *unverified* frame drafts, and a conservative suggestion:
+
+- **Source captions only** for clips whose original dialogue already carries
+  the story. This is usually preferable to unrelated AI commentary.
+- **Contextual labels** only when brief source speech and multiple frame
+  observations have some shared concrete terms. Actual generated labels still
+  require explicit opt-in and editorial review.
+- **No extra text** when evidence is thin or the video can stand on its own.
+- **Optional story script draft** can be selected only when three sampled
+  frames contain distinct observations; this never enables paid voiceover.
+
+Click **Use selected direction** to load unsaved editor controls, then review
+them before pressing **Render revised clip**. The AI does not automatically
+apply cuts, burn in text, generate paid speech, or claim a scene is understood
+from one frame. Manual changes to trim timing or reordered cuts require fresh
+analysis; ordered cut sequences are intentionally excluded from this initial
+continuous-range content reviewer.
+
+API: `POST /api/jobs/{job_id}/clips/{number}/content-review` with
+`{"start": 177.66, "duration": 10, "use_vision": true}` returns HTTP 202
+and `status_url`. Poll that URL until `state` becomes `completed` or `failed`.
+If the local vision model is not installed or reachable, the report explicitly
+falls back to source speech; it does not pretend to have watched the video.
+Frame descriptions are cached as text, never as persistent extracted images.
+
 ## Creator-directed clip discovery and publishing drafts (v0.10)
 
 The **AI editor** now accepts a bounded, explicit instruction such as "Find

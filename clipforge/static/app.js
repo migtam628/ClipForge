@@ -1441,6 +1441,156 @@ function buildClipEditor(job, clip) {
   contextRow.append(context, el('span', '',
     'Show short contextual text on screen (above speech captions; no voiceover)'));
 
+  const contentPanel = el('section', 'timeline-content-panel');
+  contentPanel.append(el('strong', '', 'Editorial direction · review before editing'),
+    el('p', 'helper-note', 'Analyze three points in the selected source range to decide whether ' +
+      'the clip needs captions, contextual labels, a story draft, or no extra text. ' +
+      'Video frames are analyzed locally when your vision model is ready. Nothing is rendered automatically.'));
+  const visualConsent = el('label', 'clip-edit-consent');
+  const useVision = el('input');
+  useVision.type = 'checkbox';
+  useVision.checked = true;
+  visualConsent.append(useVision, el('span', '',
+    'Inspect three local AI video frames (slower on CPU-only servers)'));
+  const analyzeContent = el('button', 'small-action', '✦ Analyze clip content');
+  analyzeContent.type = 'button';
+  const contentProgress = el('p', 'helper-note', '');
+  contentProgress.setAttribute('role', 'status');
+  const contentMeter = el('progress', 'timeline-scene-meter');
+  contentMeter.max = 100;
+  contentMeter.value = 0;
+  contentMeter.hidden = true;
+  contentMeter.setAttribute('aria-label', 'Clip content analysis progress');
+  const contentResult = el('div', 'timeline-content-result');
+  const editorialModes = [
+    ['no_extra_text', 'Keep original · no extra text'],
+    ['captions_only', 'Source speech captions only'],
+    ['context_labels', 'Short AI context labels · review required'],
+    ['story_script', 'Prepare a scene-aware story script · no voiceover']
+  ];
+  const modes = el('select');
+  for (const [value, label] of editorialModes) {
+    const option = el('option', '', label);
+    option.value = value;
+    modes.append(option);
+  }
+  const applyMode = el('button', 'small-action', 'Use selected direction');
+  applyMode.type = 'button';
+  const planActions = el('div', 'timeline-content-actions');
+  planActions.append(modes, applyMode);
+  planActions.hidden = true;
+  let lastPlan = null;
+  let reviewedRange = null;
+  analyzeContent.addEventListener('click', async () => {
+    const begin = Number(start.value), length = Number(duration.value);
+    if (!Number.isFinite(begin) || !Number.isFinite(length) || length < 3 ||
+        length > 120 || begin < 0 || begin + length > totalSeconds + 0.05)
+      return notify('Select a 3–120 second source range before analyzing content.');
+    if (cutsActive && cuts.length > 1)
+      return notify('Content analysis uses a continuous source range. Review your ' +
+        'reordered cuts separately before applying editorial direction.');
+    analyzeContent.disabled = true;
+    contentResult.replaceChildren();
+    planActions.hidden = true;
+    lastPlan = null;
+    reviewedRange = null;
+    contentMeter.hidden = false;
+    contentMeter.value = 0;
+    contentProgress.textContent = '0% · Waiting to review clip evidence…';
+    try {
+      const response = await fetch(`/api/jobs/${job.id}/clips/${clip.number}/content-review`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({start: begin, duration: length, use_vision: useVision.checked})
+      });
+      const queued = await response.json();
+      if (!response.ok) throw new Error(typeof queued.detail === 'string'
+        ? queued.detail : 'Could not start content review');
+      const deadline = Date.now() + 35 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+        const poll = await fetch(queued.status_url, {cache: 'no-store'});
+        if (!poll.ok) throw new Error('Content review status is unavailable');
+        const status = await poll.json();
+        contentMeter.value = Math.min(100, Math.max(0, Number(status.progress) || 0));
+        contentProgress.textContent = `${contentMeter.value}% · ${status.stage || 'Analyzing'}`;
+        if (status.state === 'failed') throw new Error(status.error || 'Content analysis failed');
+        if (status.state !== 'completed') continue;
+        const plan = status.result;
+        if (!plan || !Array.isArray(plan.evidence)) throw new Error('Invalid content plan');
+        lastPlan = plan;
+        reviewedRange = [begin, length];
+        modes.value = plan.suggested_mode;
+        const chosen = editorialModes.find(entry => entry[0] === plan.suggested_mode);
+        contentResult.append(el('strong', '', 'Suggested: ' + (chosen?.[1] || 'Review source')),
+          el('p', 'helper-note', plan.reason),
+          el('p', 'helper-note', `${plan.speech_words} speech words · ` +
+            `${Math.round(plan.speech_coverage * 100)}% timed speech coverage · ` +
+            `${plan.sampled_frames}/3 AI frame drafts · ${plan.visual_status} vision status`));
+        if (plan.vision_note) contentResult.append(el('p', 'helper-note', plan.vision_note));
+        if (plan.optional_story_script) contentResult.append(el('p', 'helper-note',
+          'A story script is an optional draft for this visually varied clip. ' +
+          'Review the entire source before deciding to use narration.'));
+        for (const item of plan.evidence) {
+          const evidenceRow = el('div', 'timeline-content-evidence-row');
+          evidenceRow.append(cutButton(`▶ ${time(item.timestamp)}`, () => {
+            sourceVideo.currentTime = item.timestamp;
+          }), el('span', '', item.speech_excerpt || 'No transcribed words at this time'),
+          el('span', 'helper-note', item.visual_observation
+            ? `Unverified AI frame draft: ${item.visual_observation}`
+            : 'No AI visual observation for this source window'));
+          contentResult.append(evidenceRow);
+        }
+        contentResult.append(el('p', 'helper-note', plan.warning));
+        planActions.hidden = false;
+        break;
+      }
+      if (!lastPlan) throw new Error('Analysis is still running. You can reopen the editor and retry.');
+    } catch (error) {
+      contentProgress.textContent = `Content review: ${error.message}`;
+      notify(error.message);
+    } finally {
+      analyzeContent.disabled = false;
+    }
+  });
+  applyMode.addEventListener('click', () => {
+    if (!lastPlan) return;
+    if (!reviewedRange || Math.abs(Number(start.value) - reviewedRange[0]) > 0.05 ||
+        Math.abs(Number(duration.value) - reviewedRange[1]) > 0.05 ||
+        (cutsActive && cuts.length > 1))
+      return notify('The source range or cut sequence changed. Analyze this selection again.');
+    const selected = modes.value;
+    if (selected === 'no_extra_text') {
+      captions.value = 'none';
+      hook.value = 'none';
+      script.value = '';
+      brandText.value = '';
+    } else if (selected === 'captions_only') {
+      if (lastPlan.speech_words === 0)
+        return notify('No transcribed speech was found. Captions cannot be verified for this range.');
+      if (captions.value === 'none') captions.value = 'bold';
+      hook.value = 'none';
+      script.value = '';
+    } else if (selected === 'context_labels') {
+      if (lastPlan.sampled_frames < 2)
+        return notify('Context labels need at least two sampled AI frames. ' +
+          'Install the local vision model or use source captions.');
+      if (captions.value === 'none' && lastPlan.speech_words >= 3) captions.value = 'bold';
+    } else if (selected === 'story_script') {
+      if (!lastPlan.optional_story_script)
+        return notify('Not enough varied visual evidence for an automatic story draft.');
+      hook.value = 'none';
+    }
+    context.checked = selected === 'context_labels';
+    regenerateCheck.checked = selected === 'context_labels' || selected === 'story_script';
+    basis.value = 'video';
+    voice.checked = false;
+    voice.dispatchEvent(new Event('change'));
+    contentProgress.textContent = 'Direction loaded into controls · Review before clicking Render.';
+    notify('Editorial direction applied to unsaved settings. Nothing was rendered.');
+  });
+  contentPanel.append(visualConsent, analyzeContent, contentProgress,
+    contentMeter, contentResult, planActions);
+
   const voiceRow = el('label', 'clip-edit-consent');
   const voice = el('input');
   voice.type = 'checkbox';
@@ -1467,7 +1617,8 @@ function buildClipEditor(job, clip) {
   save.type = 'submit';
   if (['queued', 'rendering'].includes(clip.revision_state)) save.disabled = true;
   actions.append(save);
-  form.append(fields, contextRow, regenerate, voiceRow, approvalRow, explain, actions);
+  form.append(contentPanel, fields, contextRow, regenerate, voiceRow, approvalRow,
+    explain, actions);
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
