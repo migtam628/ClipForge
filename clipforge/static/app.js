@@ -1445,7 +1445,9 @@ function buildClipEditor(job, clip) {
   contentPanel.append(el('strong', '', 'Editorial direction · review before editing'),
     el('p', 'helper-note', 'Quick review checks speech and three source frames. ' +
       'Scene sequence compares before/after frames across the clip, checks shot boundaries, ' +
-      'and surfaces pacing suggestions. All visual notes are unverified local AI drafts.'));
+      'and surfaces pacing suggestions for continuous source ranges. When cuts are reordered, ' +
+      'the review follows playback order and identifies existing edit joins. ' +
+      'All visual notes are unverified local AI drafts.'));
   const contentDepth = el('select');
   for (const [value, label] of [
     ['quick', 'Quick review · up to 3 frames'],
@@ -1492,20 +1494,28 @@ function buildClipEditor(job, clip) {
   let lastPlan = null;
   let reviewedRange = null;
   let reviewedDepth = null;
+  let reviewedCutSignature = '';
   analyzeContent.addEventListener('click', async () => {
-    const begin = Number(start.value), length = Number(duration.value);
+    const activeCuts = cutsActive ? cuts.map(part => ({
+      start: Number(part.start), duration: Number(part.duration)
+    })) : [];
+    const begin = cutsActive ? 0 : Number(start.value);
+    const length = cutsActive
+      ? Number(activeCuts.reduce((sum, part) => sum + part.duration, 0).toFixed(2))
+      : Number(duration.value);
     if (!Number.isFinite(begin) || !Number.isFinite(length) || length < 3 ||
-        length > 120 || begin < 0 || begin + length > totalSeconds + 0.05)
-      return notify('Select a 3–120 second source range before analyzing content.');
-    if (cutsActive && cuts.length > 1)
-      return notify('Content analysis uses a continuous source range. Review your ' +
-        'reordered cuts separately before applying editorial direction.');
+        length > 120 || begin < 0 || (!cutsActive && begin + length > totalSeconds + 0.05) ||
+        activeCuts.some(part => !Number.isFinite(part.start) ||
+          !Number.isFinite(part.duration) || part.duration < 0.5 ||
+          part.start < 0 || part.start + part.duration > totalSeconds + 0.05))
+      return notify('Select 3–120 seconds of valid source footage before analyzing content.');
     analyzeContent.disabled = true;
     contentResult.replaceChildren();
     planActions.hidden = true;
     lastPlan = null;
     reviewedRange = null;
     reviewedDepth = null;
+    reviewedCutSignature = '';
     contentMeter.hidden = false;
     contentMeter.value = 0;
     contentProgress.textContent = '0% · Waiting to review clip evidence…';
@@ -1513,7 +1523,8 @@ function buildClipEditor(job, clip) {
       const response = await fetch(`/api/jobs/${job.id}/clips/${clip.number}/content-review`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({start: begin, duration: length,
-          use_vision: useVision.checked, depth: contentDepth.value})
+          use_vision: useVision.checked, depth: contentDepth.value,
+          segments: activeCuts})
       });
       const queued = await response.json();
       if (!response.ok) throw new Error(typeof queued.detail === 'string'
@@ -1533,6 +1544,7 @@ function buildClipEditor(job, clip) {
         lastPlan = plan;
         reviewedRange = [begin, length];
         reviewedDepth = contentDepth.value;
+        reviewedCutSignature = JSON.stringify(activeCuts);
         modes.value = plan.suggested_mode;
         const chosen = editorialModes.find(entry => entry[0] === plan.suggested_mode);
         contentResult.append(el('strong', '', 'Suggested: ' + (chosen?.[1] || 'Review source')),
@@ -1542,17 +1554,25 @@ function buildClipEditor(job, clip) {
             `${plan.sampled_frames}/${plan.max_frames || 3} AI frame drafts · ` +
             `${plan.visual_status} vision status`));
         if (plan.vision_note) contentResult.append(el('p', 'helper-note', plan.vision_note));
+        if (plan.analysis_context === 'ordered_sequence') contentResult.append(
+          el('p', 'helper-note', `Reviewing ${plan.segment_count} cuts in output order. ` +
+            'Speech timing at cut boundaries is approximate. Preview the original source for context.'));
         if (plan.optional_story_script) contentResult.append(el('p', 'helper-note',
           'A story script is an optional draft for this visually varied clip. ' +
           'Review the entire source before deciding to use narration.'));
         if (plan.temporal) {
           const temporal = plan.temporal;
-          contentResult.append(el('strong', '', `Shot boundaries · ${temporal.cuts.length} possible cuts · ` +
+          const knownJoins = temporal.cut_method === 'existing_edit_boundaries';
+          contentResult.append(el('strong', '', `${knownJoins ? 'Existing edit joins' : 'Shot boundaries'} · ` +
+            `${temporal.cuts.length} ${knownJoins ? 'joins' : 'possible cuts'} · ` +
             `${temporal.cut_analysis_status}`));
           if (temporal.cut_warning) contentResult.append(el('p', 'helper-note', temporal.cut_warning));
-          for (const shot of temporal.cuts) {
-            contentResult.append(cutButton(`▶ Review possible cut at ${time(shot)}`, () => {
-              sourceVideo.currentTime = shot;
+          for (const point of temporal.cut_points || temporal.cuts.map(shot => ({
+            timestamp: shot, source_timestamp: shot
+          }))) {
+            contentResult.append(cutButton(`▶ ${knownJoins ? 'Output join' : 'Possible cut'} ` +
+              `${time(point.timestamp)} · source ${time(point.source_timestamp)}`, () => {
+              sourceVideo.currentTime = point.source_timestamp;
             }));
           }
           for (const [index, segment] of temporal.windows.entries()) {
@@ -1560,8 +1580,9 @@ function buildClipEditor(job, clip) {
             row.append(el('strong', '', `Window ${index + 1} · ${time(segment.start)}–${time(segment.end)}`),
               el('span', '', segment.speech_excerpt || 'No source speech detected'));
             for (const [label, frame] of [['Before', segment.before], ['After', segment.after]]) {
-              row.append(cutButton(`▶ ${label} · ${time(frame.timestamp)}`, () => {
-                sourceVideo.currentTime = frame.timestamp;
+              row.append(cutButton(`▶ ${label} · output ${time(frame.timestamp)} · ` +
+                `source ${time(frame.source_timestamp ?? frame.timestamp)}`, () => {
+                sourceVideo.currentTime = frame.source_timestamp ?? frame.timestamp;
               }), el('span', 'helper-note', frame.observation || 'Visual evidence unavailable'));
             }
             row.append(el('p', 'helper-note', `Frame comparison: ` +
@@ -1569,7 +1590,8 @@ function buildClipEditor(job, clip) {
             contentResult.append(row);
           }
           const pacing = temporal.pacing;
-          if (temporal.cut_analysis_status !== 'partial' && pacing?.segments?.length > 1) {
+          if (!knownJoins && temporal.cut_analysis_status !== 'partial' &&
+              pacing?.segments?.length > 1) {
             const pacingButton = cutButton(`✂ Load suggested pacing · remove ` +
               `${pacing.removed_seconds.toFixed(1)}s`, () => {
               if (!window.confirm('These cuts remove transcript-silent gaps. ' +
@@ -1588,8 +1610,10 @@ function buildClipEditor(job, clip) {
         } else {
           for (const item of plan.evidence) {
             const evidenceRow = el('div', 'timeline-content-evidence-row');
-            evidenceRow.append(cutButton(`▶ ${time(item.timestamp)}`, () => {
-              sourceVideo.currentTime = item.timestamp;
+            evidenceRow.append(cutButton(`▶ ${time(item.timestamp)} output` +
+              (plan.analysis_context === 'ordered_sequence'
+                ? ` · ${time(item.source_timestamp)} source` : ''), () => {
+              sourceVideo.currentTime = item.source_timestamp ?? item.timestamp;
             }), el('span', '', item.speech_excerpt || 'No transcribed words at this time'),
             el('span', 'helper-note', item.visual_observation
               ? `Unverified AI frame draft: ${item.visual_observation}`
@@ -1611,10 +1635,13 @@ function buildClipEditor(job, clip) {
   });
   applyMode.addEventListener('click', () => {
     if (!lastPlan) return;
-    if (!reviewedRange || Math.abs(Number(start.value) - reviewedRange[0]) > 0.05 ||
-        Math.abs(Number(duration.value) - reviewedRange[1]) > 0.05 ||
-        contentDepth.value !== reviewedDepth ||
-        (cutsActive && cuts.length > 1))
+    const currentCutSignature = cutsActive ? JSON.stringify(cuts.map(part => ({
+      start: Number(part.start), duration: Number(part.duration)
+    }))) : '[]';
+    if (!reviewedRange || contentDepth.value !== reviewedDepth ||
+        currentCutSignature !== reviewedCutSignature ||
+        (!cutsActive && (Math.abs(Number(start.value) - reviewedRange[0]) > 0.05 ||
+          Math.abs(Number(duration.value) - reviewedRange[1]) > 0.05)))
       return notify('The source range, review depth, or cut sequence changed. Analyze again.');
     const selected = modes.value;
     if (selected === 'no_extra_text') {

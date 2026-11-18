@@ -277,12 +277,13 @@ class SceneRangeRequest(BaseModel):
 
 
 class ContentReviewRequest(BaseModel):
-    """Read-only editorial suggestion over an original-video source range."""
+    """Read-only editorial suggestion over a source range or ordered cut list."""
 
     start: float = Field(ge=0, allow_inf_nan=False)
     duration: float = Field(ge=3, le=120, allow_inf_nan=False)
     use_vision: bool = True
     depth: Literal["quick", "sequence"] = "quick"
+    segments: list[TimelineCut] = Field(default_factory=list, max_length=12)
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -1889,7 +1890,7 @@ def _recover_interrupted_content_tasks() -> None:
 def _content_task_worker(folder: Path, number: int, token: str,
                          source: Path, transcript: list[dict], start: float,
                          duration: float, use_vision: bool, vision_note: str,
-                         depth: str = "quick") -> None:
+                         depth: str = "quick", segments: list[dict] | None = None) -> None:
     task_path = _content_task_path(folder, number)
 
     def progress(percent: int, stage: str) -> None:
@@ -1899,10 +1900,13 @@ def _content_task_worker(folder: Path, number: int, token: str,
     try:
         progress(10, "Reviewing source speech and visual evidence")
         analysis = analyze_temporal_range if depth == "sequence" else analyze_content_range
+        options = {"use_vision": use_vision, "progress": progress}
+        if segments:
+            options["segments"] = segments
         result = analysis(
             source, transcript, start, duration,
             folder / f"clip-{number:03d}-content.json",
-            use_vision=use_vision, progress=progress,
+            **options,
         )
         if vision_note:
             result["visual_status"] = "unavailable"
@@ -1941,7 +1945,16 @@ def request_content_review(job_id: str, number: int, body: ContentReviewRequest)
         raise HTTPException(404, "Clip not found")
     if clip.get("revision_state") in {"queued", "rendering"}:
         raise HTTPException(409, "Wait until this clip's edit has completed")
-    if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
+    source_duration = float(job.get("duration") or 0)
+    segments = [part.model_dump() for part in body.segments]
+    if segments:
+        combined = sum(part["duration"] for part in segments)
+        if abs(body.start) > 0.05 or abs(combined - body.duration) > 0.05:
+            raise HTTPException(422, "Ordered cuts must start at output time 0 and match length")
+        if any(part["start"] + part["duration"] > source_duration + 0.05
+               for part in segments):
+            raise HTTPException(422, "Every ordered cut must remain inside the source video")
+    elif body.start + body.duration > source_duration + 0.05:
         raise HTTPException(422, "Selected range must remain inside the source video")
     source = recover_source(folder, job)
     if source is None or not source.is_file():
@@ -1951,6 +1964,9 @@ def request_content_review(job_id: str, number: int, body: ContentReviewRequest)
     task_path = _content_task_path(folder, number)
     requested = [round(body.start, 3), round(body.duration, 3),
                  body.use_vision, body.depth]
+    if segments:
+        requested.append([[round(part["start"], 3), round(part["duration"], 3)]
+                          for part in segments])
     status_url = f"/api/jobs/{job_id}/clips/{number}/content-review/status"
     with LOCK:
         existing = load_json(task_path)
@@ -1973,7 +1989,7 @@ def request_content_review(job_id: str, number: int, body: ContentReviewRequest)
         future = _submit_job_task(
             folder, CONTENT_POOL, _content_task_worker, folder, number, token,
             source, transcript, body.start, body.duration, use_vision,
-            vision_note, body.depth,
+            vision_note, body.depth, segments,
         )
         if future is None:
             raise HTTPException(409, "Job is no longer available for analysis")

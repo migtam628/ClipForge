@@ -384,12 +384,25 @@ Click **Use selected direction** to load unsaved editor controls, then review
 them before pressing **Render revised clip**. The AI does not automatically
 apply cuts, burn in text, generate paid speech, or claim a scene is understood
 from one frame. Manual changes to trim timing or reordered cuts require fresh
-analysis; ordered cut sequences are intentionally excluded from this initial
-continuous-range content reviewer.
+analysis. For an edited timeline, the review follows cuts in playback order,
+maps sampled frames back to original source timestamps, and flags speech timing
+around edit boundaries as approximate. Changes to the cut list invalidate the
+previous review before its editorial direction can be applied.
 
 API: `POST /api/jobs/{job_id}/clips/{number}/content-review` with
 `{"start": 177.66, "duration": 10, "use_vision": true}` returns HTTP 202
 and `status_url`. Poll that URL until `state` becomes `completed` or `failed`.
+For reordered cuts, send output-relative `"start": 0`, `"duration"` equal to the
+sum of the selected cuts, and an ordered `"segments"` array:
+
+```json
+{"start": 0, "duration": 12, "use_vision": true,
+ "segments": [{"start": 40, "duration": 8}, {"start": 10, "duration": 4}]}
+```
+
+Up to 12 source-bounded cuts are supported; analysis covers 3–120 seconds of
+output. The response identifies `"analysis_context": "ordered_sequence"` and
+includes `"source_timestamp"` for navigating back to the original video.
 If the local vision model is not installed or reachable, the report explicitly
 falls back to source speech; it does not pretend to have watched the video.
 Frame descriptions are cached as text, never as persistent extracted images.
@@ -402,6 +415,9 @@ cause, or a verified action**; sampling can miss important moments. A partial
 scene scan disables pacing cut proposals. The UI can load an approved pacing
 sequence into the *unsaved* editor with confirmation, but never silently cuts
 the footage. Review speech-silent action before accepting any trimming.
+For reordered clips, scene sequence reports the *existing edit joins* instead
+of scanning the unedited source for shot boundaries. Automatic pacing suggestions
+are withheld for these sequences; inspect each join manually.
 
 To request this optional level via API, add `"depth": "sequence"` to the
 content-review POST body. The default is `"quick"` for compatibility. On
