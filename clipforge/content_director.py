@@ -16,6 +16,59 @@ from clipforge.storyboard import _meaningful_tokens, _transcript_evidence
 MAX_SAMPLES = 3
 
 
+def _source_timestamp(segments: list[dict], output_time: float) -> float:
+    """Map a timestamp on an ordered edit timeline to the original source."""
+    cursor = 0.0
+    for index, segment in enumerate(segments):
+        span = float(segment["duration"])
+        if output_time < cursor + span or index == len(segments) - 1:
+            # FFmpeg cannot decode an exclusive end position reliably.
+            offset = max(0.0, min(output_time - cursor, max(0.0, span - 0.05)))
+            return round(float(segment["start"]) + offset, 3)
+        cursor += span
+    raise ValueError("An ordered edit requires at least one source segment")
+
+
+def _sequence_transcript(transcript: list[dict], segments: list[dict]) -> list[dict]:
+    """Project source speech into output order without fabricating word timings.
+
+    Entire source ASR phrases are retained when they overlap a cut. A phrase
+    crossing a boundary can be duplicated; the review explicitly marks the
+    mapping as approximate rather than claiming word-perfect alignment.
+    """
+    output = []
+    cursor = 0.0
+    for segment in segments:
+        begin = float(segment["start"])
+        length = float(segment["duration"])
+        end = begin + length
+        for phrase in transcript:
+            if not isinstance(phrase, dict) or not isinstance(phrase.get("text"), str):
+                continue
+            try:
+                left, right = float(phrase["start"]), float(phrase["end"])
+            except (KeyError, ValueError, TypeError, OverflowError):
+                continue
+            if not (math.isfinite(left) and math.isfinite(right) and left < right
+                    and left < end and right > begin):
+                continue
+            output.append({
+                "start": round(cursor + max(begin, left) - begin, 3),
+                "end": round(cursor + min(end, right) - begin, 3),
+                "text": phrase["text"],
+            })
+        cursor += length
+    return output
+
+
+def _selection_transcript(transcript: list[dict], segments: list[dict] | None) -> list[dict]:
+    return _sequence_transcript(transcript, segments) if segments else transcript
+
+
+def _sample_source_time(segments: list[dict] | None, moment: float) -> float:
+    return _source_timestamp(segments, moment) if segments else moment
+
+
 def _source_speech(transcript: list[dict], start: float, duration: float) -> tuple[int, float]:
     """Count overlapping source words and unioned timed speech coverage."""
     end = start + duration
@@ -91,32 +144,42 @@ def recommend_content_mode(transcript: list[dict], start: float, duration: float
 
 def analyze_content_range(source: Path, transcript: list[dict], start: float,
                           duration: float, checkpoint: Path, *,
-                          use_vision: bool, progress=None) -> dict:
+                          use_vision: bool, progress=None,
+                          segments: list[dict] | None = None) -> dict:
     """Review three bounded source windows; cache text only, never images."""
     if not source.is_file() or not math.isfinite(start) or not math.isfinite(duration):
         raise ValueError("A readable original source and finite range are required")
     if start < 0 or not 3 <= duration <= 120:
         raise ValueError("Select 3–120 seconds inside the original source")
+    working_transcript = _selection_transcript(transcript, segments)
+    timeline_start = 0.0 if segments else start
     entries = []
     failures = 0
     for index in range(MAX_SAMPLES):
-        left = start + duration * index / MAX_SAMPLES
+        left = timeline_start + duration * index / MAX_SAMPLES
         span = duration / MAX_SAMPLES
+        timeline_at = left + span / 2
+        source_at = _sample_source_time(segments, timeline_at)
         observation = ""
         if use_vision:
             try:
+                sample_range = ({"start": source_at, "duration": 0} if segments else
+                                {"start": left, "duration": span})
                 draft = _visual_draft(
-                    source, {"start": left, "duration": span},
+                    source, sample_range,
                     checkpoint.with_name(checkpoint.stem + f"-frame-{index}.json"),
                 )
                 observation = draft["observation"]
             except (RuntimeError, OSError, ValueError):
                 failures += 1  # Speech evidence remains valid if vision fails.
         entries.append({
-            "timestamp": round(left + span / 2, 2),
+            "timestamp": round(timeline_at, 2),
+            "source_timestamp": round(source_at, 2),
             "start": round(left, 2), "end": round(left + span, 2),
-            "speech_excerpt": _transcript_evidence(transcript, start, left - start,
-                                                    left - start + span)[:240],
+            "speech_excerpt": _transcript_evidence(
+                working_transcript, timeline_start, left - timeline_start,
+                left - timeline_start + span,
+            )[:240],
             "visual_observation": observation,
             "visual_basis": "one_unverified_ai_frame" if observation else "unavailable",
         })
@@ -126,8 +189,12 @@ def analyze_content_range(source: Path, transcript: list[dict], start: float,
     status = ("ready" if use_vision and not failures else
               "partial" if use_vision and failures < MAX_SAMPLES else
               "unavailable" if use_vision else "not_requested")
-    return recommend_content_mode(transcript, start, duration, entries,
-                                  visual_status=status)
+    result = recommend_content_mode(working_transcript, timeline_start, duration,
+                                    entries, visual_status=status)
+    if segments:
+        result.update(analysis_context="ordered_sequence", segment_count=len(segments),
+                      transcript_timing="source_segment_approximate")
+    return result
 
 
 def _compare_descriptions(before: str, after: str) -> str:
@@ -148,7 +215,8 @@ def _compare_descriptions(before: str, after: str) -> str:
 
 def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
                            duration: float, checkpoint: Path, *,
-                           use_vision: bool, progress=None) -> dict:
+                           use_vision: bool, progress=None,
+                           segments: list[dict] | None = None) -> dict:
     """Sample *pairs* of frames across a clip and align coarse shot evidence.
 
     This analyzes before/after snapshots within consecutive source windows.
@@ -164,36 +232,58 @@ def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
         if progress:
             progress(10 + round(percent * 0.25), stage)
 
-    try:
-        scan = inspect_scene_range(
-            source, transcript, start, duration,
-            checkpoint.with_name(checkpoint.stem + "-scene-cuts.json"),
-            progress=scan_progress,
-        )
-    except (RuntimeError, TimeoutError, OSError):
-        # A video whose shot scan cannot decode still has useful speech and
-        # possibly individually readable frames. Abstain on all cut proposals.
+    working_transcript = _selection_transcript(transcript, segments)
+    timeline_start = 0.0 if segments else start
+    if segments:
+        # These are real user-arranged edit boundaries, not inferred shot cuts.
+        # Do not scan unrelated original footage or propose unmappable trims.
+        junctions = []
+        cursor = 0.0
+        for segment in segments[:-1]:
+            cursor += float(segment["duration"])
+            junctions.append(round(cursor, 2))
         scan = {
-            "cuts": [], "method": "unavailable", "analysis_status": "partial",
-            "warning": "Visual shot scanning was unavailable; no cut list was produced.",
+            "cuts": junctions, "method": "existing_edit_boundaries",
+            "analysis_status": "known_edits",
+            "warning": "These are existing timeline joins, not newly detected scene changes.",
             "auto_edit": {"segments": [], "removed_seconds": 0,
-                          "reason": "scene_scan_unavailable", "review_required": True},
+                          "reason": "ordered_sequence_requires_manual_pacing",
+                          "review_required": True},
         }
+    else:
+        try:
+            scan = inspect_scene_range(
+                source, transcript, start, duration,
+                checkpoint.with_name(checkpoint.stem + "-scene-cuts.json"),
+                progress=scan_progress,
+            )
+        except (RuntimeError, TimeoutError, OSError):
+            # A failed source scan does not invalidate existing speech.
+            scan = {
+                "cuts": [], "method": "unavailable", "analysis_status": "partial",
+                "warning": "Visual shot scanning was unavailable; no cut list was produced.",
+                "auto_edit": {"segments": [], "removed_seconds": 0,
+                              "reason": "scene_scan_unavailable", "review_required": True},
+            }
     windows = []
     evidence = []
     sample_count = 0
     failures = 0
     count = 2 if duration < 12 else MAX_SAMPLES
     for index in range(count):
-        left = start + duration * index / count
+        left = timeline_start + duration * index / count
         span = duration / count
         before_at, after_at = left + span * 0.5, left + span * 0.85
+        before_source = _sample_source_time(segments, before_at)
+        after_source = _sample_source_time(segments, after_at)
         before, after = "", ""
         if use_vision:
             for phase, scene, cache_path in (
-                ("before", {"start": left, "duration": span},
+                ("before", ({"start": before_source, "duration": 0} if segments else
+                            {"start": left, "duration": span}),
                  checkpoint.with_name(checkpoint.stem + f"-frame-{index}.json")),
-                ("after", {"start": left + span * 0.7, "duration": span * 0.3},
+                ("after", ({"start": after_source, "duration": 0} if segments else
+                           {"start": left + span * 0.7, "duration": span * 0.3}),
                  checkpoint.with_name(checkpoint.stem + f"-sequence-after-{index}.json")),
             ):
                 try:
@@ -207,18 +297,22 @@ def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
                         after = draft["observation"]
                     sample_count += 1
         speech = _transcript_evidence(
-            transcript, start, left - start, left - start + span,
+            working_transcript, timeline_start,
+            left - timeline_start, left - timeline_start + span,
         )[:240]
         signal = _compare_descriptions(before, after)
         windows.append({
             "start": round(left, 2), "end": round(left + span, 2),
-            "before": {"timestamp": round(before_at, 2), "observation": before},
-            "after": {"timestamp": round(after_at, 2), "observation": after},
+            "before": {"timestamp": round(before_at, 2),
+                       "source_timestamp": round(before_source, 2), "observation": before},
+            "after": {"timestamp": round(after_at, 2),
+                      "source_timestamp": round(after_source, 2), "observation": after},
             "speech_excerpt": speech, "change_signal": signal,
             "review_required": True,
         })
         evidence.append({
             "timestamp": round(before_at, 2), "start": round(left, 2),
+            "source_timestamp": round(before_source, 2),
             "end": round(left + span, 2), "speech_excerpt": speech,
             "visual_observation": " ".join(v for v in (before, after) if v),
             "visual_basis": "two_unverified_ai_frames" if before and after
@@ -230,7 +324,7 @@ def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
     status = ("ready" if use_vision and failures == 0 else
               "partial" if use_vision and sample_count else
               "unavailable" if use_vision else "not_requested")
-    result = recommend_content_mode(transcript, start, duration, evidence,
+    result = recommend_content_mode(working_transcript, timeline_start, duration, evidence,
                                     visual_status=status)
     # The base planner counts described windows; this report includes individual
     # snapshots and reports the actual number, even when some inference fails.
@@ -239,6 +333,9 @@ def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
     result["analysis_basis"] = ("source_speech_and_temporal_frame_pairs" if sample_count
                                 else "source_speech_and_shot_boundaries_only")
     result["analysis_depth"] = "sequence"
+    if segments:
+        result.update(analysis_context="ordered_sequence", segment_count=len(segments),
+                      transcript_timing="source_segment_approximate")
     pacing = scan["auto_edit"]
     if scan["analysis_status"] == "partial":
         pacing = {"segments": [], "removed_seconds": 0,
@@ -246,6 +343,9 @@ def analyze_temporal_range(source: Path, transcript: list[dict], start: float,
     result["temporal"] = {
         "windows": windows,
         "cuts": scan["cuts"],
+        "cut_points": [{"timestamp": point,
+                        "source_timestamp": _sample_source_time(segments, point)}
+                       for point in scan["cuts"]],
         "cut_method": scan["method"],
         "cut_analysis_status": scan["analysis_status"],
         "cut_warning": scan.get("warning"),

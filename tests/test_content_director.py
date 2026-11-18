@@ -280,3 +280,111 @@ def test_content_review_api_dispatches_sequence_mode(tmp_path, monkeypatch):
     assert state["result"]["temporal"]["windows"] == []
     assert state["result"]["vision_note"] == "Ollama unreachable"
     assert calls == [False]
+
+
+def test_ordered_clip_quick_review_uses_output_order_and_original_source_frames(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    segments = [{"start": 30, "duration": 5}, {"start": 10, "duration": 4},
+                {"start": 50, "duration": 6}]
+    transcript = [
+        {"start": 31, "end": 33, "text": "First topic"},
+        {"start": 11, "end": 13, "text": "Second topic"},
+        {"start": 52, "end": 55, "text": "Third topic"},
+    ]
+    sampled = []
+
+    def observe(_source, scene, _checkpoint):
+        sampled.append(round(scene["start"] + scene["duration"] / 2, 2))
+        return {"observation": "The same speaker appears"}
+
+    monkeypatch.setattr(content_director, "_visual_draft", observe)
+    plan = content_director.analyze_content_range(
+        source, transcript, 0, 15, tmp_path / "content.json",
+        use_vision=True, segments=segments,
+    )
+    assert sampled == [32.5, 12.5, 53.5]
+    assert plan["analysis_context"] == "ordered_sequence"
+    assert plan["segment_count"] == 3
+    assert [item["timestamp"] for item in plan["evidence"]] == [2.5, 7.5, 12.5]
+    assert [item["source_timestamp"] for item in plan["evidence"]] == sampled
+    assert [item["speech_excerpt"] for item in plan["evidence"]] == [
+        "First topic", "Second topic", "Third topic",
+    ]
+    assert plan["speech_words"] == 6
+    assert plan["transcript_timing"] == "source_segment_approximate"
+
+
+def test_ordered_clip_scene_sequence_reports_known_joins_without_scanning_or_pacing(
+        tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    segments = [{"start": 30, "duration": 5}, {"start": 10, "duration": 4},
+                {"start": 50, "duration": 6}]
+    monkeypatch.setattr(content_director, "inspect_scene_range", lambda *_, **__: (
+        1 / 0))  # edited joins must not be mistaken for visual scene detection
+    observed = []
+
+    def vision(_source, scene, _checkpoint):
+        observed.append(round(scene["start"], 2))
+        return {"observation": "A person near a table"}
+
+    monkeypatch.setattr(content_director, "_visual_draft", vision)
+    plan = content_director.analyze_temporal_range(
+        source, [], 0, 15, tmp_path / "content.json",
+        use_vision=True, segments=segments,
+    )
+    assert plan["analysis_context"] == "ordered_sequence"
+    assert plan["sampled_frames"] == 6
+    assert observed == [32.5, 34.25, 12.5, 50.25, 53.5, 55.25]
+    assert plan["temporal"]["cuts"] == [5, 9]
+    assert plan["temporal"]["cut_method"] == "existing_edit_boundaries"
+    assert plan["temporal"]["cut_analysis_status"] == "known_edits"
+    assert plan["temporal"]["cut_points"] == [
+        {"timestamp": 5, "source_timestamp": 10},
+        {"timestamp": 9, "source_timestamp": 50},
+    ]
+    assert plan["temporal"]["pacing"]["segments"] == []
+    assert plan["temporal"]["windows"][1]["after"]["source_timestamp"] == 50.25
+
+
+def test_content_review_api_accepts_reordered_cuts_and_rejects_invalid_geometry(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(module, "DATA_DIR", tmp_path)
+    job_id, folder = module._create("upload", module.Options(), "ordered cut review")
+    (folder / "source.mp4").write_bytes(b"source")
+    module._patch(folder, status="completed", source_file="source.mp4",
+                  duration=60, clips=[{"number": 1, "start": 0, "duration": 12}])
+    segments = [{"start": 40, "duration": 8}, {"start": 10, "duration": 4}]
+    endpoint = f"/api/jobs/{job_id}/clips/1/content-review"
+    sample = {"start": 0, "duration": 12, "use_vision": False,
+              "segments": segments}
+    assert client.post(endpoint, json={**sample, "duration": 14}).status_code == 422
+    assert client.post(endpoint, json={**sample, "start": 2}).status_code == 422
+    assert client.post(endpoint, json={**sample,
+                                      "segments": [{"start": 55, "duration": 8},
+                                                   segments[1]]}).status_code == 422
+    assert client.post(endpoint, json={**sample, "segments": segments * 7}).status_code == 422
+    observed = []
+
+    def review(_source, _transcript, _start, _duration, _checkpoint, *,
+               use_vision, progress, segments):
+        observed.append(segments)
+        progress(80, "Analyzed output order")
+        return {"analysis_context": "ordered_sequence", "segment_count": len(segments),
+                "suggested_mode": "captions_only", "evidence": [],
+                "visual_status": "not_requested"}
+
+    monkeypatch.setattr(module, "analyze_content_range", review)
+    queued = client.post(endpoint, json=sample)
+    assert queued.status_code == 202
+    status = {}
+    for _ in range(100):
+        status = client.get(queued.json()["status_url"]).json()
+        if status.get("state") == "completed":
+            break
+        time.sleep(0.01)
+    assert status["state"] == "completed"
+    assert status["result"]["analysis_context"] == "ordered_sequence"
+    assert observed == [segments]
