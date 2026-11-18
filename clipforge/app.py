@@ -36,6 +36,7 @@ from clipforge.captions import (
     write_storyboard_captions,
 )
 from clipforge.config_agent import request_agent
+from clipforge.content_director import analyze_content_range
 from clipforge.creator_tools import NICHES, suggest_post_copy
 from clipforge.engine import (
     audio_energy,
@@ -73,6 +74,7 @@ MAX_BATCH_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 MAX_QUEUED_SOURCES = 125
 POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge")
 SCENE_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-scene")
+CONTENT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-content")
 PUBLISH_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="clipforge-publish")
 PUBLISH_STOP = threading.Event()
 LOCK = threading.RLock()
@@ -93,6 +95,7 @@ async def lifespan(_application: FastAPI):
     """Recover local jobs, then run the persistent approved-publication scheduler."""
     recover_interrupted_jobs()
     _recover_interrupted_scene_tasks()
+    _recover_interrupted_content_tasks()
     recover_interrupted_publications()
     PUBLISH_STOP.clear()
     _dispatch_due_publications()
@@ -271,6 +274,14 @@ class SceneRangeRequest(BaseModel):
     duration: float = Field(ge=3, le=120, allow_inf_nan=False)
     vision_scene: int | None = Field(default=None, ge=0, le=11)
     async_mode: bool = Field(default=False, alias="async")
+
+
+class ContentReviewRequest(BaseModel):
+    """Read-only editorial suggestion over an original-video source range."""
+
+    start: float = Field(ge=0, allow_inf_nan=False)
+    duration: float = Field(ge=3, le=120, allow_inf_nan=False)
+    use_vision: bool = True
 
 
 class AnalyticsEntryRequest(BaseModel):
@@ -1856,6 +1867,113 @@ def find_clip_scene_cuts(job_id: str, number: int, body: SceneRangeRequest):
         raise HTTPException(503, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+def _content_task_path(folder: Path, number: int) -> Path:
+    return folder / f"clip-{number:03d}-content-task.json"
+
+
+def _recover_interrupted_content_tasks() -> None:
+    for folder in DATA_DIR.iterdir():
+        if not folder.is_dir():
+            continue
+        for path in folder.glob("clip-*-content-task.json"):
+            state = load_json(path)
+            if isinstance(state, dict) and state.get("state") in {"queued", "running"}:
+                state.update(state="failed", stage="Interrupted by server restart",
+                             error="Content review stopped during a restart. Retry to continue.")
+                save_json(path, state)
+
+
+def _content_task_worker(folder: Path, number: int, token: str,
+                         source: Path, transcript: list[dict], start: float,
+                         duration: float, use_vision: bool, vision_note: str) -> None:
+    task_path = _content_task_path(folder, number)
+
+    def progress(percent: int, stage: str) -> None:
+        _update_scene_task(task_path, token, state="running",
+                           progress=percent, stage=stage)
+
+    try:
+        progress(10, "Reviewing source speech and visual evidence")
+        result = analyze_content_range(
+            source, transcript, start, duration,
+            folder / f"clip-{number:03d}-content.json",
+            use_vision=use_vision, progress=progress,
+        )
+        if vision_note:
+            result["visual_status"] = "unavailable"
+            result["vision_note"] = vision_note
+        _update_scene_task(task_path, token, state="completed", progress=100,
+                           stage="Editorial suggestion ready for review",
+                           result=result, error=None)
+    except Exception as exc:
+        LOGGER.exception("ClipForge content review failed for %s clip %s", folder.name, number)
+        _update_scene_task(task_path, token, state="failed", stage="Content review failed",
+                           error=str(exc) if isinstance(exc, (OSError, RuntimeError, ValueError))
+                           else "Unexpected content review failure")
+
+
+@app.get("/api/jobs/{job_id}/clips/{number}/content-review/status")
+def content_review_status(job_id: str, number: int):
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if not any(c.get("number") == number for c in job.get("clips", [])):
+        raise HTTPException(404, "Clip not found")
+    state = load_json(_content_task_path(folder, number))
+    if not isinstance(state, dict):
+        raise HTTPException(404, "No content review has been started for this clip")
+    return {key: value for key, value in state.items() if key != "token"}
+
+
+@app.post("/api/jobs/{job_id}/clips/{number}/content-review", status_code=202)
+def request_content_review(job_id: str, number: int, body: ContentReviewRequest):
+    """Analyze a bounded source interval asynchronously; do not apply edits."""
+    folder = job_folder(job_id)
+    job = _read(folder)
+    if job.get("status") != "completed":
+        raise HTTPException(409, "Content review requires a completed job")
+    clip = next((c for c in job.get("clips", []) if c.get("number") == number), None)
+    if clip is None:
+        raise HTTPException(404, "Clip not found")
+    if clip.get("revision_state") in {"queued", "rendering"}:
+        raise HTTPException(409, "Wait until this clip's edit has completed")
+    if body.start + body.duration > float(job.get("duration") or 0) + 0.05:
+        raise HTTPException(422, "Selected range must remain inside the source video")
+    source = recover_source(folder, job)
+    if source is None or not source.is_file():
+        raise HTTPException(404, "Original source video is unavailable")
+    transcript = load_json(folder / "transcript.json")
+    transcript = transcript if isinstance(transcript, list) else []
+    task_path = _content_task_path(folder, number)
+    requested = [round(body.start, 3), round(body.duration, 3), body.use_vision]
+    status_url = f"/api/jobs/{job_id}/clips/{number}/content-review/status"
+    with LOCK:
+        existing = load_json(task_path)
+        if isinstance(existing, dict) and existing.get("state") in {"queued", "running"}:
+            if existing.get("request") != requested:
+                raise HTTPException(409, "A different content review is already running")
+            return {"state": existing["state"], "progress": existing["progress"],
+                    "stage": existing["stage"], "status_url": status_url}
+        vision_note = ""
+        use_vision = body.use_vision
+        if use_vision:
+            availability = vision_status()
+            if availability["status"] != "ready":
+                use_vision = False
+                vision_note = availability["note"]
+        token = uuid.uuid4().hex
+        save_json(task_path, {"token": token, "request": requested,
+                              "state": "queued", "progress": 0, "stage": "Queued",
+                              "error": None})
+        future = _submit_job_task(
+            folder, CONTENT_POOL, _content_task_worker, folder, number, token,
+            source, transcript, body.start, body.duration, use_vision, vision_note,
+        )
+        if future is None:
+            raise HTTPException(409, "Job is no longer available for analysis")
+    return {"state": "queued", "progress": 0, "stage": "Queued",
+            "status_url": status_url}
 
 
 @app.post("/api/jobs/{job_id}/music", status_code=201)
