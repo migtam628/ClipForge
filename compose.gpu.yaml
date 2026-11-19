@@ -1,0 +1,26 @@
+# Optional NVIDIA overlay. Combine with compose.yaml OR compose.tailscale.yaml.
+# Requires a supported NVIDIA GPU, host drivers, and NVIDIA Container Toolkit.
+# Never enable this overlay on CPU-only hosts; the base Compose remains CPU-safe.
+services:
+  clipforge:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    environment:
+      CLIPFORGE_VIDEO_ENCODER: ${CLIPFORGE_VIDEO_ENCODER:-auto}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

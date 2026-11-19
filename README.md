@@ -701,6 +701,59 @@ ClipForge now has **five distinct page URLs** with real navigation:
 
 Rendering defaults to two FFmpeg encoder threads to reduce memory/CPU contention with Ollama on small servers (adjust `CLIPFORGE_FFMPEG_THREADS` if needed).
 
+### Optional NVIDIA GPU acceleration (CPU fallback)
+
+The standard `Dockerfile` and `compose.yaml` still work on CPU-only hosts.
+For NVIDIA GPUs, use `Dockerfile.gpu` and `compose.gpu.yaml` to expose the GPU
+to **both** Whisper transcription (CUDA 12 + cuDNN 9) and the optional Ollama
+service. FFmpeg H.264 exports can use NVENC; other filters and analysis steps
+still run on CPU. No NVIDIA access is required for ordinary deployments.
+
+Install a compatible **NVIDIA driver and NVIDIA Container Toolkit** on the
+host first. Configure Docker's NVIDIA runtime using `nvidia-ctk` following the
+toolkit's official instructions; this can restart Docker, so finish active
+video jobs beforehand. Validate the host with `nvidia-smi -L` and verify that
+`docker info --format '{{json .Runtimes}}'` includes `nvidia`. CUDA 12.8
+requires a sufficiently recent host driver.
+
+On the normal local Compose deployment, start ClipForge and its Ollama sidecar:
+
+```bash
+./scripts/start-clipforge.sh auto --ai   # GPU when usable, otherwise CPU
+./scripts/start-clipforge.sh cpu --ai    # explicitly use CPU
+./scripts/start-clipforge.sh nvidia --ai # require NVIDIA GPU runtime
+```
+
+The script detects host NVIDIA hardware and Docker runtime support before
+selecting the GPU Compose overlay. It does **not** install GPU drivers. With
+the alternative Tailnet stack, add `--tailscale`. To inspect without starting:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml --profile ai config
+```
+
+Existing Docker volumes and AI models are retained when switching backends;
+avoid switching images while a job is processing. GPU mode uses the
+`nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` base image for GPU-compatible
+Whisper libraries, so its first build is larger than the CPU image.
+
+Hardware behavior is configurable in Settings / `.env`:
+
+| Setting | Options | Default |
+| --- | --- | --- |
+| `CLIPFORGE_WHISPER_DEVICE` | `auto`, `cpu`, `cuda` | `auto` |
+| `CLIPFORGE_VIDEO_ENCODER` | `cpu`, `auto`, `nvenc` | `cpu` in standard Compose; `auto` with GPU overlay |
+
+`auto` uses CUDA or NVENC when usable and retries CPU if GPU initialization or
+encoding fails. Explicit `cuda`/`nvenc` modes report an error when unavailable.
+The app's AI Settings status reports the *detected* Whisper device; actual
+success and GPU-to-CPU fallback events are recorded in container logs.
+Ollama chooses its own backend according to visible hardware and model size;
+use `docker compose --profile ai exec ollama ollama ps` to inspect its processor
+allocation when a model is running. The overlay currently targets **NVIDIA**;
+AMD/Intel GPUs require separate runtime-specific configuration. Do not assume
+GPU acceleration from a listed encoder or device alone.
+
 Settings save to the persistent `clipforge_data` Docker volume. New jobs inherit
 the current Studio defaults; existing jobs and previously generated clips are not changed.
 API limits remain 1-100 clips, with 1/3/5 among the new visual presets.

@@ -3063,9 +3063,11 @@ async function loadSettings() {
     const settings = await response.json();
     if (currentPage === 'studio') {
       applyDefaults(settings.defaults, '');
+      const whisperDevice = settings.ai.whisper_acceleration?.selected || 'cpu';
       $('ai-notice').textContent = settings.ai.whisper_installed &&
           settings.ai.ollama_configured
-        ? 'AI: Whisper + ' + settings.ai.model + '. Local scoring can take longer on CPU-only servers.'
+        ? 'AI: Whisper (' + whisperDevice.toUpperCase() + ' detected) + ' +
+          settings.ai.model + '. Processing speed depends on available hardware.'
         : 'AI is not fully configured. You can still use Audio-energy selection.';
       updateNarrationNotice();
       if (settings.vision && $('narration-basis').value === 'video') {
@@ -3083,6 +3085,9 @@ async function loadSettings() {
       $('settings-ai-status').textContent =
         (settings.ai.ready ? 'Ready for AI highlight selection.' : 'AI setup needs attention.') +
         ' Whisper: ' + (settings.ai.whisper_installed ? 'installed' : 'unavailable') +
+        ' · Transcription device: ' +
+        (settings.ai.whisper_acceleration?.selected || 'cpu').toUpperCase() +
+        ' (requested: ' + (settings.ai.whisper_acceleration?.requested || 'auto') + ')' +
         ' · Ollama: ' + settings.ai.status +
         ' · Model: ' + settings.ai.model + '. ' + settings.ai.note;
       const yt = settings.youtube_import || {configured: false, status: 'not_configured'};
