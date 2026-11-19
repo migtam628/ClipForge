@@ -24,10 +24,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Validate Docker Compose (local and Tailscale)
+      - name: Validate Docker Compose (CPU, NVIDIA, and Tailscale)
         run: |
           docker compose -f compose.yaml config --quiet
           docker compose -f compose.tailscale.yaml config --quiet
+          docker compose -f compose.yaml -f compose.gpu.yaml --profile ai config --quiet
+          docker compose -f compose.tailscale.yaml -f compose.gpu.yaml --profile ai config --quiet
+          bash -n scripts/start-clipforge.sh
       - name: Install FFmpeg and FFprobe
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install package with test tools

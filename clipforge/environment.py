@@ -19,10 +19,14 @@ ENVIRONMENT_FIELDS = {
     "CLIPFORGE_AI_MODEL": ("AI models", "text", False, "Local text model"),
     "CLIPFORGE_VISION_MODEL": ("AI models", "text", False, "Local visual model"),
     "CLIPFORGE_WHISPER_MODEL": ("AI models", "whisper", False, "Transcription model"),
+    "CLIPFORGE_WHISPER_DEVICE": ("AI models", "whisper-device", False,
+                                 "Whisper device: auto, cpu, or cuda"),
     "CLIPFORGE_AI_BATCH_SIZE": ("AI models", "int:1:32", False, "Windows scored per AI batch"),
     "CLIPFORGE_AI_TIMEOUT": ("AI models", "int:30:3600", False, "Model request timeout in seconds"),
     "CLIPFORGE_AI_RETRIES": ("AI models", "int:0:10", False, "Model retries"),
     "CLIPFORGE_FFMPEG_THREADS": ("Video processing", "int:1:32", False, "Video rendering threads"),
+    "CLIPFORGE_VIDEO_ENCODER": ("Video processing", "video-encoder", False,
+                                "H.264 encoder: cpu, auto, or nvenc"),
     "CLIPFORGE_ELEVENLABS_API_KEY": ("Narration", "secret", True, "ElevenLabs API key"),
     "CLIPFORGE_ELEVENLABS_VOICE_ID": ("Narration", "text", False, "ElevenLabs voice ID"),
     "CLIPFORGE_ELEVENLABS_MODEL": ("Narration", "text", False, "ElevenLabs model"),
@@ -78,6 +82,10 @@ def validate_patch(changes: dict[str, str]) -> dict[str, str]:
                 raise ValueError(f"{key} must be between {low} and {high}")
         if kind == "whisper" and value not in {"tiny", "base", "small", "medium"}:
             raise ValueError("Invalid Whisper model")
+        if kind == "whisper-device" and value not in {"auto", "cpu", "cuda"}:
+            raise ValueError("Whisper device must be auto, cpu, or cuda")
+        if kind == "video-encoder" and value not in {"cpu", "auto", "nvenc"}:
+            raise ValueError("Video encoder must be cpu, auto, or nvenc")
         if kind == "ip-family" and value not in {"auto", "ipv4", "ipv6"}:
             raise ValueError("Invalid IP family")
         if kind == "meta-version" and not re.fullmatch(r"v\d+\.\d+", value):

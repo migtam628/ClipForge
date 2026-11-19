@@ -17,6 +17,32 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
+LOGGER = logging.getLogger("uvicorn.error")
+
+
+def _cuda_device_count() -> int:
+    """Check usable CTranslate2 CUDA devices without requiring CUDA on CPU hosts."""
+    try:
+        import ctranslate2
+
+        return max(0, int(ctranslate2.get_cuda_device_count()))
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return 0
+
+
+def whisper_acceleration() -> dict:
+    """Expose the requested and usable Whisper backend; not a GPU performance claim."""
+    preference = os.environ.get("CLIPFORGE_WHISPER_DEVICE", "auto").strip().lower()
+    if preference not in {"auto", "cpu", "cuda"}:
+        preference = "auto"
+    count = _cuda_device_count() if preference != "cpu" else 0
+    return {
+        "requested": preference,
+        "selected": "cuda" if count and preference != "cpu" else "cpu",
+        "cuda_devices": count,
+        "requires_gpu": preference == "cuda" and not count,
+    }
+
 
 def ai_capabilities() -> dict:
     """Check the actual local text model, not just whether a URL was supplied."""
@@ -55,12 +81,13 @@ def ai_capabilities() -> dict:
         "model_installed": installed,
         "status": status,
         "ready": whisper and installed,
+        "whisper_acceleration": whisper_acceleration(),
         "note": note if whisper else note + " Install faster-whisper to enable transcription.",
     }
 
 
 def transcribe(source: Path, model_dir: Path) -> list[dict]:
-    """Whisper transcript with word timestamps, CPU-friendly int8 inference."""
+    """Prefer available CUDA, with a logged CPU fallback in automatic mode."""
     try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
@@ -69,22 +96,41 @@ def transcribe(source: Path, model_dir: Path) -> list[dict]:
     if model_name not in {"tiny", "base", "small", "medium"}:
         raise ValueError("Unsupported Whisper model configured")
     model_dir.mkdir(parents=True, exist_ok=True)
-    model = WhisperModel(model_name, device="cpu", compute_type="int8", download_root=str(model_dir))
-    segments, _ = model.transcribe(str(source), beam_size=1, vad_filter=True, word_timestamps=True)
-    result = []
-    for s in segments:
-        words = [
-            {"start": round(float(w.start), 2), "end": round(float(w.end), 2),
-             "text": w.word.strip()}
-            for w in (s.words or [])
-            if w.start is not None and w.end is not None and w.word.strip()
-        ]
-        if s.text.strip():
-            result.append({"start": round(float(s.start), 2), "end": round(float(s.end), 2),
-                           "text": s.text.strip()[:1000], "words": words})
-        if len(result) >= 20000:
-            break
-    return result
+    acceleration = whisper_acceleration()
+    if acceleration["requires_gpu"]:
+        raise RuntimeError("CUDA transcription requested but no usable CUDA GPU was detected")
+
+    def run(device: str, compute_type: str) -> list[dict]:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type,
+                             download_root=str(model_dir))
+        segments, _ = model.transcribe(str(source), beam_size=1, vad_filter=True,
+                                       word_timestamps=True)
+        result = []
+        for s in segments:
+            words = [
+                {"start": round(float(w.start), 2), "end": round(float(w.end), 2),
+                 "text": w.word.strip()}
+                for w in (s.words or [])
+                if w.start is not None and w.end is not None and w.word.strip()
+            ]
+            if s.text.strip():
+                result.append({"start": round(float(s.start), 2), "end": round(float(s.end), 2),
+                               "text": s.text.strip()[:1000], "words": words})
+            if len(result) >= 20000:
+                break
+        return result
+
+    device = acceleration["selected"]
+    compute_type = "float16" if device == "cuda" else "int8"
+    try:
+        result = run(device, compute_type)
+        LOGGER.info("Whisper transcription completed with %s (%s)", device, compute_type)
+        return result
+    except (RuntimeError, OSError, ValueError) as exc:
+        if device != "cuda" or acceleration["requested"] != "auto":
+            raise
+        LOGGER.warning("CUDA Whisper failed (%s); retrying on CPU", exc)
+        return run("cpu", "int8")
 
 
 def _windows(transcript: list[dict], duration: float, seconds: int,

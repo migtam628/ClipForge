@@ -5,14 +5,67 @@ from __future__ import annotations
 import array
 import ipaddress
 import json
+import logging
 import math
 import os
+import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from clipforge.formats import OUTPUT_SIZES
 from clipforge.import_auth import _is_youtube, youtube_cookie_session
+
+LOGGER = logging.getLogger("uvicorn.error")
+
+
+@lru_cache(maxsize=1)
+def _nvenc_available() -> bool:
+    """Prove a real hardware encode works, not merely that FFmpeg lists NVENC."""
+    if shutil.which("nvidia-smi") is None:
+        return False
+    try:
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+            "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1:d=0.2",
+            "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-",
+        ], capture_output=True, text=True, timeout=15, check=True)
+        return True
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+
+
+def _run_encoded(prefix: list[str], tail: list[str], dest: Path, *,
+                 quality: int, threads: int | None = None) -> None:
+    """Use NVENC when available, transparently retry CPU if auto GPU fails."""
+    preference = os.environ.get("CLIPFORGE_VIDEO_ENCODER", "cpu").strip().lower()
+    if preference not in {"cpu", "auto", "nvenc"}:
+        raise ValueError("CLIPFORGE_VIDEO_ENCODER must be cpu, auto, or nvenc")
+    gpu = preference != "cpu" and _nvenc_available()
+    if preference == "nvenc" and not gpu:
+        raise RuntimeError("NVENC requested but no usable NVIDIA encoder was detected")
+
+    def execute(use_gpu: bool) -> None:
+        if use_gpu:
+            codec = ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
+                     "-cq", str(quality), "-b:v", "0"]
+        else:
+            codec = ["-c:v", "libx264"]
+            if threads is not None:
+                codec += ["-threads", str(threads)]
+            codec += ["-preset", "veryfast", "-crf", str(quality)]
+        subprocess.run(prefix + codec + tail + [str(dest)], capture_output=True,
+                       text=True, timeout=600, check=True)
+
+    try:
+        execute(gpu)
+    except subprocess.CalledProcessError as exc:
+        if not gpu or preference != "auto":
+            raise
+        LOGGER.warning("NVENC render failed (FFmpeg exit %s); retrying with libx264",
+                       exc.returncode)
+        execute(False)
 
 HOSTS = (
     "youtube.com",
@@ -204,12 +257,9 @@ def render_sequence(source: Path, dest: Path, segments: list[dict],
         args += ["-map", "[outa]"]
     else:
         args += ["-an"]
-    args += [
-        "-t", f"{total:.3f}", "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", "23", "-pix_fmt", "yuv420p", "-c:a", "aac",
-        "-b:a", "128k", "-movflags", "+faststart", str(dest),
-    ]
-    subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+    args += ["-t", f"{total:.3f}"]
+    _run_encoded(args, ["-pix_fmt", "yuv420p", "-c:a", "aac",
+                        "-b:a", "128k", "-movflags", "+faststart"], dest, quality=23)
 
 
 def render_clip(
@@ -395,13 +445,9 @@ def render_clip(
         threads = max(1, min(8, int(os.environ.get("CLIPFORGE_FFMPEG_THREADS", "2"))))
     except ValueError:
         threads = 2
-    args += [
-        "-vf", vf, "-c:v", "libx264", "-threads", str(threads),
-        "-preset", "veryfast", "-crf",
-        "25", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart", str(dest),
-    ]
-    subprocess.run(args, capture_output=True, text=True, timeout=600, check=True)
+    args += ["-vf", vf]
+    _run_encoded(args, ["-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+                        "-movflags", "+faststart"], dest, quality=25, threads=threads)
 
 
 
